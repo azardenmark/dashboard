@@ -1,0 +1,75 @@
+/* UsersContext.css — تنسيقات بسيطة لصفحات المستخدمين */
+
+.users-page {
+  padding: 1.5rem;
+  font-family: "Cairo", sans-serif;
+  color: #243b4a;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(6px);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+
+.users-table th,
+.users-table td {
+  padding: 0.75rem 1rem;
+  text-align: center;
+  font-size: 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.users-table th {
+  background: #f0fdf4;
+  font-weight: 700;
+  color: #065f46;
+}
+
+.users-table tr:hover td {
+  background: #f9fafb;
+}
+
+.user-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.user-actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.user-actions .edit {
+  background: #3b82f6;
+  color: white;
+}
+.user-actions .edit:hover {
+  background: #2563eb;
+}
+
+.user-actions .delete {
+  background: #ef4444;
+  color: white;
+}
+.user-actions .delete:hover {
+  background: #dc2626;
+}
+
+.user-actions .toggle {
+  background: #10b981;
+  color: white;
+}
+.user-actions .toggle:hover {
+  background: #059669;
+}

@@ -1,0 +1,16 @@
+/* Neutralize Vite demo styles */
+#root {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  text-align: initial;
+}
+
+/* Remove demo leftovers */
+.logo { height: auto; padding: 0; will-change: auto; transition: none; }
+.card { padding: 0; }         /* حتى لا تتعارض مع بطاقة Index.css */
+.read-the-docs { color: inherit; }
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo { animation: none; }
+}
+@keyframes logo-spin { from { transform:none; } to { transform:none; } }

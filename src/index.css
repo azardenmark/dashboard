@@ -1,0 +1,63 @@
+/* Reset خفيف */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+body {
+  margin: 0;
+  background: #0b1220;
+  color: #e5e7eb;
+  font-family: "Cairo", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* متغيّرات عامة */
+:root{
+  --header-h: 2.5rem;          /* ارتفاع الهيدر */
+  --sb-width-open: 280px;      /* يطابق Sidebar.css */
+  --sb-width-rail: 72px;       /* يطابق Sidebar.css */
+}
+
+/* هيدر صغير */
+.app-header{
+  height: var(--header-h);
+  display:flex; align-items:center; justify-content:space-between;
+  padding-inline:5px;
+  border-bottom:1px solid #2b3a4c;
+  background:#0f172a;
+  font-size:.9rem;
+}
+.app-header h1,.app-header .title{
+  margin:0; font-size:1rem; font-weight:70; color:#e5e7eb;
+}
+
+/* منطقة العمل: تفسح مجالاً للسايدبار الثابت (وضع open كافتراضي) */
+.app-main{
+  display:block;
+  width:100%;
+  min-height:100dvh;
+  padding-inline-start: var(--sb-width-open);
+}
+
+/* تتكيّف تلقائيًا حسب حالة السايدبار — تُضبط من Sidebar.jsx على عنصر <html> */
+:root[data-sb="rail"]   .app-main{ padding-inline-start: var(--sb-width-rail); }
+:root[data-sb="hidden"] .app-main{ padding-inline-start: 0; }
+
+/* محتوى الصفحة العام */
+.page-content{
+  flex:1;
+  padding-inline: 0;    /* لا فراغات جانبية */
+  padding-block: 0;     /* نبدأ من أعلى */
+  background:#0b1220;
+}
+
+/* كروت اختيارية */
+.card{
+  background:#0f172a;
+  border:1px solid #2b3a4c;
+  border-radius:12px;
+  padding:16px;
+}
+
+/* دعم تمرير ناعم اختيارياً */
+html { scroll-behavior: smooth; }
