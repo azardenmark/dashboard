@@ -1,4 +1,4 @@
-/* Reset خفيف */
+/* ========== Reset خفيف ========== */
 *,
 *::before,
 *::after { box-sizing: border-box; }
@@ -11,53 +11,143 @@ body {
   font-family: "Cairo", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
 
-/* متغيّرات عامة */
+/* ========== متغيّرات عامة ========== */
 :root{
-  --header-h: 2.5rem;          /* ارتفاع الهيدر */
-  --sb-width-open: 280px;      /* يطابق Sidebar.css */
-  --sb-width-rail: 72px;       /* يطابق Sidebar.css */
+  --header-h: 56px;              /* ارتفاع الهيدر */
+  --space: 16px;                 /* وحدة الهوامش الأساسية */
+  --round: 12px;                 /* نصف القطر */
+  --line: #2b3a4c;               /* لون الحدود */
+  --ink:  #e5e7eb;               /* لون النص */
+  --muted:#94a3b8;               /* نص خافت */
+
+  --sb-width-open: 280px;        /* يطابق Sidebar.css */
+  --sb-width-rail: 72px;         /* يطابق Sidebar.css */
+
+  --content-max: 1320px;         /* أقصى عرض للمحتوى */
 }
 
-/* هيدر صغير */
+/* ========== الهيدر ========== */
 .app-header{
   height: var(--header-h);
   display:flex; align-items:center; justify-content:space-between;
-  padding-inline:5px;
-  border-bottom:1px solid #2b3a4c;
+  padding-inline: var(--space);
+  gap: var(--space);
+  border-bottom:1px solid var(--line);
   background:#0f172a;
-  font-size:.9rem;
+  font-size:.95rem;
 }
-.app-header h1,.app-header .title{
-  margin:0; font-size:1rem; font-weight:70; color:#e5e7eb;
+.app-header .title{
+  margin:0; font-size:1.05rem; font-weight:800; color:var(--ink);
 }
 
-/* منطقة العمل: تفسح مجالاً للسايدبار الثابت (وضع open كافتراضي) */
+/* زر تسجيل الخروج */
+.logout-btn{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:6px 10px; height:32px;
+  border-radius:10px; border:1px solid var(--line);
+  background:#0f172a; color:var(--ink); font-weight:700; cursor:pointer;
+}
+.logout-btn:hover{ background:#121b31; border-color:#334155; }
+
+/* ========== منطقة العمل ========== */
 .app-main{
-  display:block;
-  width:100%;
+  display:block; width:100%;
   min-height:100dvh;
   padding-inline-start: var(--sb-width-open);
+  /* مساحة حول المحتوى مع حد أعلى موحد */
+  padding-block: 0;
 }
 
-/* تتكيّف تلقائيًا حسب حالة السايدبار — تُضبط من Sidebar.jsx على عنصر <html> */
+/* تتكيّف تلقائيًا حسب حالة السايدبار — تُضبط من Sidebar.jsx على <html> */
 :root[data-sb="rail"]   .app-main{ padding-inline-start: var(--sb-width-rail); }
 :root[data-sb="hidden"] .app-main{ padding-inline-start: 0; }
 
-/* محتوى الصفحة العام */
+/* ========== محتوى الصفحة العام ========== */
 .page-content{
-  flex:1;
-  padding-inline: 0;    /* لا فراغات جانبية */
-  padding-block: 0;     /* نبدأ من أعلى */
   background:#0b1220;
+  padding: calc(var(--space) * 1.25) var(--space);
+  display:flex; justify-content:center; /* نوسّط الحاوية الداخلية أفقياً */
+}
+.page-content > *{
+  width:100%;
+  max-width: var(--content-max); /* عرض ثابت لكل الصفحات */
+  margin-inline:auto;
 }
 
-/* كروت اختيارية */
+/* كروت عامة */
 .card{
   background:#0f172a;
-  border:1px solid #2b3a4c;
-  border-radius:12px;
-  padding:16px;
+  border:1px solid var(--line);
+  border-radius:var(--round);
+  padding: calc(var(--space) * 1);
 }
 
-/* دعم تمرير ناعم اختيارياً */
+/* دعم تمرير ناعم */
 html { scroll-behavior: smooth; }
+
+/* ========== صفحة "تسجيل الدخول" ========== */
+.login-container{
+  min-height: 100dvh;            /* وسط الشاشة */
+  display:grid; place-items:center;
+  padding: calc(var(--space) * 2) var(--space);
+}
+.login-form{
+  width:100%;
+  max-width: 520px;
+  background: #0f172a;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 18px 40px -14px rgba(0,0,0,.45);
+}
+.login-form h2{
+  margin: 10px 0 6px; font-weight: 800; font-size: 22px; text-align:center;
+}
+.login-form p.sub{
+  margin:0 0 18px; color: var(--muted); text-align:center; font-size: 13px;
+}
+.login-form .brand{
+  height:48px; width:48px; display:grid; place-items:center; margin: 0 auto 8px;
+  border-radius: 12px; color:#fff; font-size:20px;
+  background: linear-gradient(135deg,#10b981,#0ea5e9);
+  box-shadow:0 10px 24px rgba(16,185,129,.25);
+}
+.login-form .row{ margin-top: 10px; }
+.login-form label{ display:block; margin:0 0 6px; font-size:13px; color:var(--muted); }
+
+.login-form .field{
+  position:relative;
+}
+.login-form input{
+  width:100%; height:44px;
+  background:#0b1324; color:var(--ink);
+  border:1px solid var(--line); border-radius:12px;
+  padding: 0 14px;
+  outline: none;
+}
+.login-form input:focus{ border-color:#334155; box-shadow: 0 0 0 3px rgba(51,65,85,.25); }
+
+.login-form .eye{
+  position:absolute; inset-inline-start:8px; top:50%; transform: translateY(-50%);
+  height:28px; width:28px; display:grid; place-items:center;
+  border-radius:8px; border:1px solid var(--line); background:#0f172a; color:#e5e7eb;
+  cursor:pointer;
+}
+.login-form .eye:hover{ background:#121b31; }
+
+.login-form button[type="submit"]{
+  width:100%; height:44px; margin-top: 14px;
+  border-radius:12px; border:1px solid transparent;
+  background:#10b981; color:#06281f; font-weight:800; cursor:pointer;
+}
+.login-form button[type="submit"]:hover{ filter: brightness(0.95); }
+
+.login-form .error{
+  margin:0 0 8px; padding:8px 10px; font-size: 13px;
+  background: rgba(239,68,68,.12); color:#fecaca; border:1px solid rgba(248,113,113,.35);
+  border-radius:10px; text-align:center;
+}
+
+/* لأية روابط أعلى الصفحة (nav في الهيدر) */
+.text-link{ color:#7dd3fc; text-decoration:none; }
+.text-link:hover{ text-decoration:underline; }

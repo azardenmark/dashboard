@@ -1,27 +1,30 @@
-// src/pages/AddGuardian.jsx
+// src/pages/AddTeacher.jsx
 import React, { useState } from "react";
-import {
-  createUserOnSecondary,
-  deleteSecondaryUser,
-  signOutSecondary, // ✅ إضافة للاستيراد للتنظيف النهائي
-} from "../firebase";
-// 👈 بدّلنا الاستيراد
-import { saveToFirestore } from "../firebase";
 import "./FormStyles.css";
 
-// يحوّل الأرقام العربية/الفارسية إلى لاتينية قبل التحقق/الحفظ
+// Firebase (نستخدم المثيل الثانوي + التخزين)
+import {
+  storage,
+  createUserOnSecondary,
+  signOutSecondary,
+  deleteSecondaryUser,
+} from "../firebase";
+import { saveToFirestore } from "../firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+
+// يحوّل الأرقام العربية/الفارسية إلى لاتينية
 function normalizeDigits(str = "") {
   const map = {
-    "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
-    "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
-    "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
-    "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9"
+    "٠": "0","١": "1","٢": "2","٣": "3","٤": "4",
+    "٥": "5","٦": "6","٧": "7","٨": "8","٩": "9",
+    "۰": "0","۱": "1","۲": "2","۳": "3","۴": "4",
+    "۵": "5","۶": "6","۷": "7","۸": "8","۹": "9"
   };
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
 
 function prettyFirebaseError(err) {
-  if (!err?.code) return err?.message || "حدث خطأ غير معروف";
+  if (!err?.code) return err.message || "حدث خطأ غير معروف";
   switch (err.code) {
     case "auth/email-already-in-use":
       return "هذا البريد مستخدم بالفعل.";
@@ -34,7 +37,8 @@ function prettyFirebaseError(err) {
   }
 }
 
-export default function AddGuardian() {
+export default function AddTeacher() {
+  // الحقول
   const [firstName, setFirstName] = useState("");
   const [lastName,  setLastName]  = useState("");
   const [email,     setEmail]     = useState("");
@@ -44,104 +48,117 @@ export default function AddGuardian() {
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
-  const [children, setChildren] = useState([{ id: 1, name: "", img: "" }]);
+  // شهادات/ملفات متعددة (اختياري)
+  const [files, setFiles] = useState([]); // File[]
 
+  // واجهة
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [success, setSuccess] = useState("");
 
+  // أخطاء الحقول
   const [errors, setErrors] = useState({
     firstName: "", lastName: "", contact: "", password: "", confirm: ""
   });
 
+  // إظهار/إخفاء كلمات المرور
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  function onUploadChild(index, file) {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setChildren(prev => {
-        const next = [...prev];
-        next[index] = { ...next[index], img: reader.result };
-        return next;
+  // اختيار ملفات
+  function onPickFiles(fileList) {
+    if (!fileList?.length) return;
+    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+  }
+  // حذف ملف من القائمة
+  function removeFileAt(index) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  // رفع جميع الملفات إلى Storage وإرجاع ميتاداتا
+  async function uploadCertificates(uid) {
+    const uploaded = [];
+    for (const f of files) {
+      const path = `teachers/${uid}/certificates/${Date.now()}_${f.name}`;
+      const r = ref(storage, path);
+      await uploadBytes(r, f);
+      const url = await getDownloadURL(r);
+      uploaded.push({
+        name: f.name,
+        size: f.size,
+        contentType: f.type || "application/octet-stream",
+        url,
+        path,
       });
-    };
-    reader.readAsDataURL(file);
+    }
+    return uploaded;
   }
 
-  function addChild() {
-    setChildren(prev => [...prev, { id: Date.now(), name: "", img: "" }]);
+  // تفريغ النموذج
+  function resetForm() {
+    setFirstName(""); setLastName(""); setEmail(""); setPhone("");
+    setGender("male"); setAddress(""); setPassword(""); setConfirm("");
+    setFiles([]);
+    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"" });
+    setFormError(""); setSuccess("");
   }
 
-  function removeChild(id) {
-    setChildren(prev => prev.filter(c => c.id !== id));
-  }
-
+  // إرسال
   async function submit(e) {
     e.preventDefault();
-    setFormError("");
-    setSuccess("");
+    setFormError(""); setSuccess("");
 
     const phoneNorm = normalizeDigits(phone);
 
     const nextErrors = {
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
       lastName : lastName.trim()  ? "" : "الكنية مطلوبة",
-      contact  : (email.trim() || phoneNorm.trim()) ? "" : "أدخل البريد أو رقم الهاتف",
+      contact  : (email.trim() && phoneNorm.trim()) ? "" : "أدخل البريد ورقم الهاتف",
       password : password.length >= 6 ? "" : "كلمة المرور لا تقل عن 6 أحرف",
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
     };
     setErrors(nextErrors);
+    if (Object.values(nextErrors).some(Boolean)) return;
 
-    const hasError = Object.values(nextErrors).some(Boolean);
-    if (hasError) return;
-
-    let userCred = null;
+    let cred = null;
     try {
       setLoading(true);
 
-      // 1) إنشاء المستخدم على المثيل الثانوي (لا يغيّر جلسة الأدمن)
-      // ✅ التصحيح: تمرير كائن { email, password } حسب تعريف الدالة في firebase.js
-      userCred = await createUserOnSecondary({ email: email.trim(), password });
-      const uid = userCred.uid; // ✅ الدالة ترجع user مباشرة، لذا نستخدم userCred.uid
+      // 1) إنشاء المعلّم على المثيل الثانوي (لا يغيّر جلسة الأدمن)
+      // ✅ التصحيح: تمرير كائن { email, password } والاعتماد على أن createUserOnSecondary تُعيد user مباشرة
+      cred = await createUserOnSecondary({ email: email.trim(), password });
+      const uid = cred.uid; // ✅ بدلاً من cred.user.uid
+
+      // 2) رفع الشهادات (اختياري)
+      const certs = await uploadCertificates(uid);
 
       try {
-        // 2) تخزين البيانات في Firestore
-        await saveToFirestore("guardians", {
+        // 3) حفظ بيانات المعلّم في Firestore
+        await saveToFirestore("teachers", {
           firstName: firstName.trim(),
           lastName : lastName.trim(),
-          email    : email.trim() || null,
-          phone    : phoneNorm.trim() || null,
+          email    : email.trim(),
+          phone    : phoneNorm.trim(),
           gender,
           address  : address.trim() || null,
-          children : children.map(c => ({
-            name: c.name?.trim() || "",
-            img : c.img || ""
-          })),
+          certificates: certs,
           createdAt: new Date().toISOString(),
         }, { id: uid });
 
-        setSuccess("🎉 تم إنشاء حساب وليّ الأمر وحفظ البيانات بنجاح.");
-
-        // 3) تفريغ النموذج
-        setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-        setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-        setChildren([{ id: 1, name: "", img: "" }]);
-        setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
+        setSuccess("✅ تم إنشاء حساب المعلّم وحفظ بياناته بنجاح.");
+        resetForm();
       } catch (dbErr) {
-        // فشل حفظ Firestore → حذف المستخدم الذي أنشأناه (rollback)
+        // فشل الحفظ → نحذف المستخدم الذي أنشأناه (rollback)
         console.error("Firestore save failed, rolling back user:", dbErr);
-        // ✅ deleteSecondaryUser لا يحتاج باراميتر حسب تعريفه الحالي
-        if (userCred?.uid) await deleteSecondaryUser();
-        throw dbErr; // إلى الـ catch الخارجي
+        if (cred?.uid) await deleteSecondaryUser(); // ✅ بدون تمرير user
+        throw dbErr;
       }
     } catch (err) {
       console.error(err);
       setFormError(prettyFirebaseError(err));
     } finally {
       // تنظيف: نسجّل خروج المثيل الثانوي فقط — جلسة الأدمن تبقى
-      await signOutSecondary(); // ✅ متوفر كـ alias في firebase.js
+      await signOutSecondary(); // ✅ بدون باراميترات
       setLoading(false);
     }
   }
@@ -149,19 +166,19 @@ export default function AddGuardian() {
   return (
     <div className="ap-page">
       <div className="ap-hero">
-        <h1 className="ap-hero__title">إضافة وليّ أمر</h1>
-        <p className="ap-hero__sub">أدخل البيانات الأساسية لوليّ الأمر وأبنائه.</p>
+        <h1 className="ap-hero__title">إضافة معلّم</h1>
+        <p className="ap-hero__sub">أدخل البيانات الأساسية للمعلّم الجديد.</p>
       </div>
 
       <section className="ap-card">
         <div className="ap-card__head">
           <div>البيانات الأساسية</div>
-          <div className="ap-note">سيتم إنشاء الحساب بالدور: <b>وليّ أمر</b></div>
+          <div className="ap-note">سيتم إنشاء الحساب كـ <b>معلّم</b></div>
         </div>
 
         <div className="ap-card__body">
-          {formError && <div className="ap-error" style={{ marginBottom: 8 }}>⚠️ {formError}</div>}
-          {success   && <div className="ap-success" style={{ marginBottom: 8 }}>{success}</div>}
+          {formError && <div className="ap-error" style={{marginBottom:8}}>⚠️ {formError}</div>}
+          {success   && <div className="ap-success" style={{marginBottom:8}}>{success}</div>}
 
           <form className="ap-form" onSubmit={submit}>
             {/* الاسم */}
@@ -171,7 +188,7 @@ export default function AddGuardian() {
                 dir="auto"
                 className={`ap-input ${errors.firstName ? "ap-invalid" : ""}`}
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e)=>setFirstName(e.target.value)}
                 type="text"
                 placeholder="أدخل الاسم"
               />
@@ -185,7 +202,7 @@ export default function AddGuardian() {
                 dir="auto"
                 className={`ap-input ${errors.lastName ? "ap-invalid" : ""}`}
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e)=>setLastName(e.target.value)}
                 type="text"
                 placeholder="أدخل الكنية"
               />
@@ -199,7 +216,7 @@ export default function AddGuardian() {
                 dir="ltr"
                 className={`ap-input ${errors.contact ? "ap-invalid" : ""}`}
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e)=>setEmail(e.target.value)}
                 type="email"
                 placeholder="example@email.com"
                 inputMode="email"
@@ -213,7 +230,7 @@ export default function AddGuardian() {
                 dir="ltr"
                 className={`ap-input ${errors.contact ? "ap-invalid" : ""}`}
                 value={phone}
-                onChange={(e) => setPhone(normalizeDigits(e.target.value))}
+                onChange={(e)=>setPhone(normalizeDigits(e.target.value))}
                 type="tel"
                 placeholder="09xxxxxxxx"
                 inputMode="tel"
@@ -225,19 +242,19 @@ export default function AddGuardian() {
             <div className="ap-field">
               <label><span className="ap-required">*</span> الجنس</label>
               <div className="ap-radio">
-                <label><input type="radio" checked={gender === "male"} onChange={() => setGender("male")} /> ذكر</label>
-                <label><input type="radio" checked={gender === "female"} onChange={() => setGender("female")} /> أنثى</label>
+                <label><input type="radio" checked={gender==="male"} onChange={()=>setGender("male")} /> ذكر</label>
+                <label><input type="radio" checked={gender==="female"} onChange={()=>setGender("female")} /> أنثى</label>
               </div>
             </div>
 
-            {/* العنوان */}
+            {/* العنوان (اختياري) */}
             <div className="ap-field ap-span-2">
-              <label><span className="ap-required">*</span> عنوان المنزل</label>
+              <label>العنوان</label>
               <input
                 dir="auto"
                 className="ap-input"
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                onChange={(e)=>setAddress(e.target.value)}
                 type="text"
                 placeholder="المدينة، الشارع، رقم المنزل…"
               />
@@ -250,7 +267,7 @@ export default function AddGuardian() {
                 <input
                   className={`ap-input ${errors.password ? "ap-invalid" : ""}`}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e)=>setPassword(e.target.value)}
                   type={showPw ? "text" : "password"}
                   placeholder="••••••••"
                   autoComplete="new-password"
@@ -258,7 +275,9 @@ export default function AddGuardian() {
                 <button
                   type="button"
                   className="ap-eye"
-                  onClick={() => setShowPw(v => !v)}
+                  aria-label={showPw ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+                  title={showPw ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+                  onClick={()=>setShowPw(v=>!v)}
                 >
                   {showPw ? "🙈" : "👁️"}
                 </button>
@@ -273,7 +292,7 @@ export default function AddGuardian() {
                 <input
                   className={`ap-input ${errors.confirm ? "ap-invalid" : ""}`}
                   value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
+                  onChange={(e)=>setConfirm(e.target.value)}
                   type={showConfirm ? "text" : "password"}
                   placeholder="••••••••"
                   autoComplete="new-password"
@@ -281,7 +300,9 @@ export default function AddGuardian() {
                 <button
                   type="button"
                   className="ap-eye"
-                  onClick={() => setShowConfirm(v => !v)}
+                  aria-label={showConfirm ? "إخفاء التأكيد" : "إظهار التأكيد"}
+                  title={showConfirm ? "إخفاء التأكيد" : "إظهار التأكيد"}
+                  onClick={()=>setShowConfirm(v=>!v)}
                 >
                   {showConfirm ? "🙈" : "👁️"}
                 </button>
@@ -289,58 +310,46 @@ export default function AddGuardian() {
               {errors.confirm && <div className="ap-error">{errors.confirm}</div>}
             </div>
 
-            {/* أبناء وليّ الأمر */}
-            <div className="ap-section ap-span-2">
-              <div className="ap-section__head">
-                <h3>أبناء وليّ الأمر</h3>
-                <button type="button" onClick={addChild} className="ap-btn ap-btn--soft">+ إضافة ابن/ابنة</button>
-              </div>
+            {/* الشهادات / ملفات داعمة (اختياري) */}
+            <div className="ap-field ap-span-2">
+              <label>شهادات / ملفات داعمة (اختياري)</label>
+              <label className="ap-upload">
+                اختر ملفات
+                <input
+                  type="file"
+                  multiple
+                  accept="application/pdf,image/*"
+                  onChange={(e)=>onPickFiles(e.target.files)}
+                />
+              </label>
 
-              <div className="ap-kids">
-                {children.map((kid, idx) => (
-                  <div key={kid.id} className="ap-kid">
-                    <div className="ap-avatar">
-                      {kid.img ? <img src={kid.img} alt="" /> : <div className="ap-avatar__ph">👧</div>}
-                      <label className="ap-upload">
-                        رفع صورة
-                        <input type="file" accept="image/*" onChange={(e) => onUploadChild(idx, e.target.files?.[0])} />
-                      </label>
+              {files.length > 0 && (
+                <div className="ap-files" style={{ marginTop: 8 }}>
+                  {files.map((f, idx) => (
+                    <div key={idx} className="ap-file-item">
+                      <span>
+                        📂 {f.name} —{" "}
+                        {f.size >= 1024*1024
+                          ? `${(f.size/1024/1024).toFixed(2)} MB`
+                          : `${(f.size/1024).toFixed(1)} KB`}
+                      </span>
+                      <button
+                        type="button"
+                        className="ap-btn ap-btn--danger"
+                        onClick={()=>removeFileAt(idx)}
+                      >
+                        حذف
+                      </button>
                     </div>
-                    <label><span className="ap-required">*</span> اسم الطفل</label>
-                    <input
-                      dir="auto"
-                      className="ap-input"
-                      placeholder="اسم الطفل"
-                      value={kid.name}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setChildren(prev => {
-                          const next = [...prev];
-                          next[idx] = { ...next[idx], name: val };
-                          return next;
-                        });
-                      }}
-                    />
-                    <button type="button" onClick={() => removeChild(kid.id)} className="ap-btn ap-btn--danger">حذف</button>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* الأزرار */}
             <div className="ap-actions ap-span-2">
-              <span className="ap-note">سيتم إنشاء الحساب كـ <b>وليّ أمر</b>.</span>
-              <button
-                type="button"
-                className="ap-btn"
-                onClick={() => {
-                  setFormError(""); setSuccess("");
-                  setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
-                  setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-                  setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-                  setChildren([{ id: 1, name: "", img: "" }]);
-                }}
-              >
+              <span className="ap-note">سيتم إنشاء الحساب كـ <b>معلّم</b>.</span>
+              <button type="button" className="ap-btn" onClick={resetForm}>
                 تفريغ
               </button>
               <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>

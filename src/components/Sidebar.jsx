@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+
 import "./Sidebar.css";
 
-function Item({ to, label, icon, open }) {
+function Item({ to, label, icon, open, end = false }) {
   return (
     <NavLink
       to={to}
+      end={end}
       data-tip={label}
       title={!open ? label : undefined}
       className={({ isActive }) => ["sb-item", isActive ? "is-active" : ""].join(" ")}
@@ -88,9 +90,11 @@ export default function Sidebar() {
       {/* روابط */}
       {!hidden && (
         <nav className="sb-nav">
+          {/* الرئيسية */}
           <Item
             to="/"
-            label="الرئيسية"
+            end
+            label="الصفحة الرئيسية"
             open={open}
             icon={
               <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
@@ -100,11 +104,11 @@ export default function Sidebar() {
             }
           />
 
-          {/* الأشخاص */}
+          {/* الأشخاص (زر فئة مع روابط فرعية) */}
           <button
             type="button"
             onClick={() => setPeopleOpen(v => !v)}
-            className={["sb-item", peopleOpen ? "is-active" : ""].join(" ")}
+            className={["sb-item", (isInPeople || peopleOpen) ? "is-active" : ""].join(" ")}
             title={!open ? "الأشخاص" : undefined}
             data-tip="الأشخاص"
           >
@@ -126,17 +130,44 @@ export default function Sidebar() {
 
           {peopleOpen && (
             <div className={open ? "sb-sub" : "sb-sub is-rail"}>
-              <NavLink to="/people/guardian" className="sb-sublink" data-tip="إضافة ولي أمر">
+              <NavLink to="/people/guardian" className={({ isActive }) => ["sb-sublink", isActive ? "is-active" : ""].join(" ")} data-tip="إضافة ولي أمر">
                 <span className="dot" /> <span className="text">إضافة ولي أمر 👪</span>
               </NavLink>
-              <NavLink to="/people/teacher" className="sb-sublink" data-tip="إضافة معلّم">
+              <NavLink to="/people/teacher" className={({ isActive }) => ["sb-sublink", isActive ? "is-active" : ""].join(" ")} data-tip="إضافة معلّم">
                 <span className="dot" /> <span className="text">إضافة معلّم 📚</span>
               </NavLink>
-              <NavLink to="/people/driver" className="sb-sublink" data-tip="إضافة سائق">
+              <NavLink to="/people/driver" className={({ isActive }) => ["sb-sublink", isActive ? "is-active" : ""].join(" ")} data-tip="إضافة سائق">
                 <span className="dot" /> <span className="text">إضافة سائق 🚌</span>
               </NavLink>
+              {/*  تم حذف رابط إضافة طالب من هنا */}
             </div>
           )}
+
+          {/* زر مستقل: إضافة طالب */}
+          <Item
+            to="/people/student"
+            label="إضافة طالب"
+            open={open}
+            icon={
+              <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 10l-10-5L2 10l10 5 10-5z" />
+                <path d="M6 12v5a4 4 0 008 0v-5" />
+              </svg>
+            }
+          />
+
+          {/* المستخدمون */}
+          <Item
+            to="/users"
+            label="المستخدمون"
+            open={open}
+            icon={
+              <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M16 11a4 4 0 10-8 0 4 4 0 008 0z" />
+                <path d="M6 21a8 8 0 1112 0" />
+              </svg>
+            }
+          />
         </nav>
       )}
 
