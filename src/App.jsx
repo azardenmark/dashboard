@@ -5,6 +5,7 @@ import { Routes, Route, Link, Navigate, useLocation, useNavigate } from "react-r
 import Sidebar from "./components/Sidebar";
 
 // Pages
+import Kindergarten from "./pages/Kindergarten";
 import AddGuardian from "./pages/AddGuardian";
 import AddTeacher from "./pages/AddTeacher";
 import AddDriver from "./pages/AddDriver";
@@ -174,6 +175,8 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/kindergarten" 
+            element={<Kindergarten />} />
 
             {/* صفحة الدخول عامة */}
             <Route path="/login" element={<Login />} />

@@ -181,3 +181,22 @@
 .sb--rail .sb-search { display:none !important; }
 .sb--rail .sb-item{ justify-content:center; gap:0; padding:0; }
 .sb--rail .sb-ico{ margin:0 auto; }
+
+
+
+/* زر ملوّن (Accent) */
+.sb-item.is-accent {
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #a7f3d0;
+}
+.sb-item.is-accent:hover {
+  background: rgba(34, 197, 94, 0.18);
+}
+.sb-item.is-accent.is-active {
+  background: rgba(34, 197, 94, 0.25);
+  color: #eafff4;
+}
+.sb-item.is-accent .sb-active-bar {
+  background: #22c55e; /* الأخضر */
+}

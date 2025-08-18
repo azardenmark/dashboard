@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-
 import "./Sidebar.css";
 
-function Item({ to, label, icon, open, end = false }) {
+function Item({ to, label, icon, open, end = false, accent = false }) {
   return (
     <NavLink
       to={to}
       end={end}
       data-tip={label}
       title={!open ? label : undefined}
-      className={({ isActive }) => ["sb-item", isActive ? "is-active" : ""].join(" ")}
+      className={({ isActive }) =>
+        ["sb-item", accent ? "is-accent" : "", isActive ? "is-active" : ""].join(" ")
+      }
     >
       <span className="sb-ico">{icon}</span>
       {open && <span className="sb-label">{label}</span>}
@@ -28,14 +29,12 @@ export default function Sidebar() {
   const isInPeople = useMemo(() => /^\/people(\/|$)/.test(loc.pathname), [loc.pathname]);
   useEffect(() => { if (isInPeople) setPeopleOpen(true); }, [isInPeople]);
 
-  // اضبط data-sb على <html> لتكييف .app-main تلقائيًا
   useEffect(() => {
     const mode = hidden ? "hidden" : (open ? "open" : "rail");
     document.documentElement.setAttribute("data-sb", mode);
     return () => document.documentElement.removeAttribute("data-sb");
   }, [open, hidden]);
 
-  // مستمع زر خارجي اختياري
   useEffect(() => {
     const onToggle = () => {
       setHidden((was) => {
@@ -104,7 +103,20 @@ export default function Sidebar() {
             }
           />
 
-          {/* الأشخاص (زر فئة مع روابط فرعية) */}
+          {/* زر الروضة — ملوّن (accent) */}
+          <Item
+            to="/kindergarten"
+            label="الروضة"
+            open={open}
+            accent
+            icon={
+              <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 12h16M4 8l8-5 8 5M6 12v8h5v-6h2v6h5v-8" />
+              </svg>
+            }
+          />
+
+          {/* الأشخاص (قائمة فرعية) */}
           <button
             type="button"
             onClick={() => setPeopleOpen(v => !v)}
@@ -139,19 +151,19 @@ export default function Sidebar() {
               <NavLink to="/people/driver" className={({ isActive }) => ["sb-sublink", isActive ? "is-active" : ""].join(" ")} data-tip="إضافة سائق">
                 <span className="dot" /> <span className="text">إضافة سائق 🚌</span>
               </NavLink>
-              {/*  تم حذف رابط إضافة طالب من هنا */}
             </div>
           )}
 
-          {/* زر مستقل: إضافة طالب */}
+          {/* إضافة طالب كبند مستقل (إن كنت قد أضفته سابقًا أبقه) */}
           <Item
             to="/people/student"
             label="إضافة طالب"
             open={open}
             icon={
               <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 10l-10-5L2 10l10 5 10-5z" />
-                <path d="M6 12v5a4 4 0 008 0v-5" />
+                <path d="M12 3l9 5-9 5-9-5 9-5z" />
+                <path d="M3 10l9 5 9-5" />
+                <path d="M7 12v5a5 5 0 0010 0v-5" />
               </svg>
             }
           />
