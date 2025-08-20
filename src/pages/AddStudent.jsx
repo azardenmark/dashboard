@@ -1,7 +1,13 @@
 // src/pages/AddStudent.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./FormStyles.css";
-import { db, storage, saveToFirestore, linkStudentToGuardians } from "../firebase";
+import {
+  db,
+  storage,
+  saveToFirestore,
+  linkStudentToGuardians,
+  assignPublicIdAndIndex, // ✅ لتوليد publicId وكتابته في وثيقة الطالب
+} from "../firebase";
 
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -233,7 +239,7 @@ export default function AddStudent() {
         primaryGuardianId: primaryGuardianId || null,
         guardianIds,
 
-        // ننسخ للأعمدة في Users (بريد/هاتف من الحساب الرئيسي إن وُجد)
+        // ننسخ بريد/هاتف من الحساب الرئيسي إن وُجد
         phone: primary?.phone || null,
         email: primary?.email || null,
 
@@ -266,15 +272,30 @@ export default function AddStudent() {
           dietNotes: health.dietNotes || "",
           vision: health.vision || "",
         },
+        createdAt: new Date().toISOString(),
       };
 
+      // 1) إنشاء وثيقة الطالب
       const { id } = await saveToFirestore("students", base);
-     // اربط الطالب المختار مع أولياء الأمور (studentIds داخل وثائق guardians)
-await linkStudentToGuardians({
-  studentId: id,
-  guardianIds: guardiansAll, // نفس المصفوفة التي كوّنتها من اختياراتك
-});
 
+      // 2) توليد/تعيين publicId (بدون فهرسة لتسجيل الدخول)
+      const publicId = await assignPublicIdAndIndex({
+        uid: id,
+        role: "student",
+        col : "students",
+        email: base.email || null,
+        phone: base.phone || null,
+        displayName: `${base.firstName} ${base.lastName}`.trim(),
+        index: false, // 👈 الطالب لا يُستخدم للدخول
+      });
+
+      // 3) ربط الطالب المختار مع أولياء الأمور (studentIds داخل وثائق guardians)
+      await linkStudentToGuardians({
+        studentId: id,
+        guardianIds, // ✅ إصلاح: كان guardiansAll
+      });
+
+      // 4) رفع الصورة (اختياري)
       if (photoFile) {
         const path = `students/${id}/avatar_${Date.now()}_${photoFile.name}`;
         const r = ref(storage, path);
@@ -283,7 +304,7 @@ await linkStudentToGuardians({
         await saveToFirestore("students", { photoURL: url }, { id, merge: true });
       }
 
-      setSuccess("✅ تم إضافة الطالب وربط البيانات بنجاح.");
+      setSuccess(`✅ تم إضافة الطالب وربط البيانات بنجاح. الكود: ${publicId}`);
       resetForm();
     } catch (err) {
       console.error(err);

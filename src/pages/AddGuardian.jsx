@@ -1,15 +1,16 @@
 // src/pages/AddGuardian.jsx
 import React, { useState } from "react";
 import {
+  db,
   createUserOnSecondary,
   deleteSecondaryUser,
-  signOutSecondary, // ✅ إضافة للاستيراد للتنظيف النهائي
+  signOutSecondary,
+  assignPublicIdAndIndex, // ✅
 } from "../firebase";
-// 👈 بدّلنا الاستيراد
 import { saveToFirestore } from "../firebase";
 import "./FormStyles.css";
+import { doc, deleteDoc } from "firebase/firestore";
 
-// يحوّل الأرقام العربية/الفارسية إلى لاتينية قبل التحقق/الحفظ
 function normalizeDigits(str = "") {
   const map = {
     "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
@@ -23,14 +24,10 @@ function normalizeDigits(str = "") {
 function prettyFirebaseError(err) {
   if (!err?.code) return err?.message || "حدث خطأ غير معروف";
   switch (err.code) {
-    case "auth/email-already-in-use":
-      return "هذا البريد مستخدم بالفعل.";
-    case "auth/weak-password":
-      return "كلمة المرور ضعيفة جداً.";
-    case "auth/invalid-email":
-      return "البريد الإلكتروني غير صالح.";
-    default:
-      return err.message || "فشل العملية.";
+    case "auth/email-already-in-use": return "هذا البريد مستخدم بالفعل.";
+    case "auth/weak-password":        return "كلمة المرور ضعيفة جداً.";
+    case "auth/invalid-email":        return "البريد الإلكتروني غير صالح.";
+    default:                          return err.message || "فشل العملية.";
   }
 }
 
@@ -73,18 +70,17 @@ export default function AddGuardian() {
   function addChild() {
     setChildren(prev => [...prev, { id: Date.now(), name: "", img: "" }]);
   }
-
   function removeChild(id) {
     setChildren(prev => prev.filter(c => c.id !== id));
   }
 
   async function submit(e) {
     e.preventDefault();
-    setFormError("");
-    setSuccess("");
+    setFormError(""); setSuccess("");
 
     const phoneNorm = normalizeDigits(phone);
 
+    // تحقّق شامل قبل ملامسة Auth
     const nextErrors = {
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
       lastName : lastName.trim()  ? "" : "الكنية مطلوبة",
@@ -93,55 +89,65 @@ export default function AddGuardian() {
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
     };
     setErrors(nextErrors);
-
     const hasError = Object.values(nextErrors).some(Boolean);
     if (hasError) return;
 
-    let userCred = null;
+    // متغيرات للـ rollback
+    let uid = null;
+
     try {
       setLoading(true);
 
-      // 1) إنشاء المستخدم على المثيل الثانوي (لا يغيّر جلسة الأدمن)
-      // ✅ التصحيح: تمرير كائن { email, password } حسب تعريف الدالة في firebase.js
-      userCred = await createUserOnSecondary({ email: email.trim(), password });
-      const uid = userCred.uid; // ✅ الدالة ترجع user مباشرة، لذا نستخدم userCred.uid
+      // 1) Auth (بعد اكتمال التحقق فقط)
+      const userCred = await createUserOnSecondary({ email: email.trim(), password });
+      uid = userCred.uid;
 
-      try {
-        // 2) تخزين البيانات في Firestore
-        await saveToFirestore("guardians", {
-          firstName: firstName.trim(),
-          lastName : lastName.trim(),
-          email    : email.trim() || null,
-          phone    : phoneNorm.trim() || null,
-          gender,
-          address  : address.trim() || null,
-          children : children.map(c => ({
-            name: c.name?.trim() || "",
-            img : c.img || ""
-          })),
-          createdAt: new Date().toISOString(),
-        }, { id: uid });
+      // 2) Firestore
+      await saveToFirestore("guardians", {
+        role     : "guardian",
+        firstName: firstName.trim(),
+        lastName : lastName.trim(),
+        email    : email.trim() || null,
+        phone    : phoneNorm.trim() || null,
+        gender,
+        address  : address.trim() || null,
+        children : children.map(c => ({
+          name: c.name?.trim() || "",
+          img : c.img || ""
+        })),
+        active   : true,
+        createdAt: new Date().toISOString(),
+      }, { id: uid });
 
-        setSuccess("🎉 تم إنشاء حساب وليّ الأمر وحفظ البيانات بنجاح.");
+      // 3) publicId + فهرسة لتسجيل الدخول
+      const publicId = await assignPublicIdAndIndex({
+        uid,
+        role: "guardian",
+        col : "guardians",
+        email: email.trim() || null,
+        phone: phoneNorm.trim() || null,
+        displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        index: true,
+      });
 
-        // 3) تفريغ النموذج
-        setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-        setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-        setChildren([{ id: 1, name: "", img: "" }]);
-        setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
-      } catch (dbErr) {
-        // فشل حفظ Firestore → حذف المستخدم الذي أنشأناه (rollback)
-        console.error("Firestore save failed, rolling back user:", dbErr);
-        // ✅ deleteSecondaryUser لا يحتاج باراميتر حسب تعريفه الحالي
-        if (userCred?.uid) await deleteSecondaryUser();
-        throw dbErr; // إلى الـ catch الخارجي
-      }
+      setSuccess(`🎉 تم إنشاء حساب وليّ الأمر بنجاح. الكود: ${publicId}`);
+
+      // تفريغ
+      setFirstName(""); setLastName(""); setEmail(""); setPhone("");
+      setGender("male"); setAddress(""); setPassword(""); setConfirm("");
+      setChildren([{ id: 1, name: "", img: "" }]);
+      setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
+
     } catch (err) {
       console.error(err);
+
+      // ===== Rollback =====
+      try { await deleteSecondaryUser(); } catch {/* تجاهل */}
+      if (uid) { try { await deleteDoc(doc(db, "guardians", uid)); } catch {/* تجاهل */} }
+
       setFormError(prettyFirebaseError(err));
     } finally {
-      // تنظيف: نسجّل خروج المثيل الثانوي فقط — جلسة الأدمن تبقى
-      await signOutSecondary(); // ✅ متوفر كـ alias في firebase.js
+      await signOutSecondary();
       setLoading(false);
     }
   }

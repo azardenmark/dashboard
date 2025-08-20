@@ -1,18 +1,19 @@
-
 // src/pages/AddDriver.jsx
 import React, { useState } from "react";
 import "./FormStyles.css";
 
-// Firebase (نستخدم مثيل المصادقة الثانوي + التخزين)
 import {
+  db,
   storage,
   createUserOnSecondary,
   signOutSecondary,
   deleteSecondaryUser,
+  assignPublicIdAndIndex, // ✅ توليد/حجز publicId + فهرسة
 } from "../firebase";
 
 import { saveToFirestore } from "../firebase";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { doc, deleteDoc } from "firebase/firestore";
 
 // يحوّل الأرقام العربية/الفارسية إلى لاتينية
 function normalizeDigits(str = "") {
@@ -25,7 +26,6 @@ function normalizeDigits(str = "") {
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
 
-// صياغة أخطاء Firebase لرسالة مفهومة
 function prettyFirebaseError(err) {
   if (!err?.code) return err?.message || "حدث خطأ غير معروف.";
   switch (err.code) {
@@ -72,7 +72,7 @@ export default function AddDriver() {
   }
   function removeFileAt(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
 
-  // رفع رخص القيادة وإرجاع بياناتها
+  // رفع رخص القيادة وإرجاع بياناتها (مع تتبع المسارات للحذف عند الفشل)
   async function uploadLicenses(uid) {
     const uploaded = [];
     for (const f of files) {
@@ -105,6 +105,7 @@ export default function AddDriver() {
     if (loading) return;
     setFormError(""); setSuccess("");
 
+    // تحقّق شامل محلي قبل أي اتصال بـ Auth
     const phoneNorm = normalizeDigits(phone);
     const nextErrors = {
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
@@ -116,45 +117,70 @@ export default function AddDriver() {
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
 
-    let cred = null;
+    // متغيرات لآلية الاسترجاع
+    let uid = null;
+    let uploadedPaths = [];
+
     try {
       setLoading(true);
 
-      // 1) إنشاء المستخدم على المثيل الثانوي (لا يغيّر جلسة الأدمن)
-      // ✅ التصحيح: تمرير كائن { email, password } حسب تعريف الدالة في firebase.js
-      cred = await createUserOnSecondary({ email: email.trim(), password });
-      const uid = cred.uid; // ✅ كانت cred.user.uid
+      // 1) إنشاء مستخدم Auth (بعد اكتمال التحقق فقط)
+      const cred = await createUserOnSecondary({ email: email.trim(), password });
+      uid = cred.uid;
 
-      try {
-        // 2) ارفع الرخص (اختياري)
-        const licenses = await uploadLicenses(uid);
+      // 2) رفع الملفات (قد تفشل — سنحذف المستخدم والملفات عند الفشل)
+      const licenses = await uploadLicenses(uid);
+      uploadedPaths = licenses.map(x => x.path);
 
-        // 3) احفظ المستند (doc id = uid) في drivers
-        await saveToFirestore("drivers", {
-          firstName: firstName.trim(),
-          lastName : lastName.trim(),
-          email    : email.trim(),
-          phone    : phoneNorm.trim(),
-          gender,
-          address  : address.trim() || null,
-          licenses,
-          createdAt: new Date().toISOString(),
-        }, { id: uid });
+      // 3) حفظ مستند السائق (id = uid)
+      await saveToFirestore("drivers", {
+        role     : "driver",
+        firstName: firstName.trim(),
+        lastName : lastName.trim(),
+        email    : email.trim(),
+        phone    : phoneNorm.trim(),
+        gender,
+        address  : address.trim() || null,
+        licenses,
+        active   : true,
+        createdAt: new Date().toISOString(),
+      }, { id: uid });
 
-        setSuccess("🎉 تم إنشاء حساب السائق وحفظ البيانات بنجاح.");
-        resetForm();
-      } catch (dbOrUploadErr) {
-        // فشل الحفظ/الرفع → نحذف المستخدم الذي أنشأناه (rollback)
-        console.error("Saving driver failed, rolling back auth user:", dbOrUploadErr);
-        if (cred?.uid) await deleteSecondaryUser(); // ✅ بدون تمرير user
-        throw dbOrUploadErr; // إلى الـ catch الخارجي
-      }
+      // 4) توليد/حجز publicId + فهرسته لتسجيل الدخول
+      const publicId = await assignPublicIdAndIndex({
+        uid,
+        role: "driver",
+        col : "drivers",
+        email: email.trim() || null,
+        phone: phoneNorm.trim() || null,
+        displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        index: true,
+      });
+
+      setSuccess(`🎉 تم إنشاء حساب السائق وحفظ البيانات بنجاح. الكود: ${publicId}`);
+      resetForm();
     } catch (err) {
       console.error(err);
+
+      // ===== Rollback شامل =====
+      try {
+        // حذف المستخدم الذي تم إنشاؤه على المثيل الثانوي (إن وُجد)
+        await deleteSecondaryUser();
+      } catch {/* تجاهل */}
+
+      // حذف أي ملفات تم رفعها
+      for (const p of uploadedPaths) {
+        try { await deleteObject(ref(storage, p)); } catch {/* تجاهل */}
+      }
+
+      // حذف وثيقة Firestore إن أنشئت
+      if (uid) {
+        try { await deleteDoc(doc(db, "drivers", uid)); } catch {/* تجاهل */}
+      }
+
       setFormError(prettyFirebaseError(err));
     } finally {
-      // نسجّل خروج المثيل الثانوي فقط — جلسة الأدمن تبقى
-      await signOutSecondary(); // ✅ بدون باراميترات
+      await signOutSecondary(); // لا يمسّ جلسة الأدمن
       setLoading(false);
     }
   }

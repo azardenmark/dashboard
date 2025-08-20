@@ -20,8 +20,10 @@ import {
   writeBatch,
   arrayUnion,
   arrayRemove,
+  getDoc,
+  deleteDoc,
 } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+import { getStorage, ref, deleteObject } from "firebase/storage";
 
 // إعدادات مشروعك
 const firebaseConfig = {
@@ -58,8 +60,8 @@ export async function saveToFirestore(
     await setDoc(doc(db, collectionPath, id), payload, { merge });
     return { id };
   } else {
-    const ref = await addDoc(collection(db, collectionPath), payload);
-    return { id: ref.id };
+    const refAdded = await addDoc(collection(db, collectionPath), payload);
+    return { id: refAdded.id };
   }
 }
 
@@ -81,7 +83,9 @@ function getOrInitSecondaryApp() {
  *  - createUserOnSecondary(email, password)
  *  - أو createUserOnSecondary({ email, password })
  * يُرجع دائمًا كائنًا يحوي:
- *  { user, uid } للتوافق مع استخدامك في الصفحات.
+ *  { user, uid, email }
+ *
+ * ملاحظة: ننظّف جلسة المثيل الثانوي فورًا بعد الإنشاء.
  */
 export async function createUserOnSecondary(emailOrObj, pwdMaybe) {
   const { email, password } =
@@ -116,7 +120,6 @@ export async function createUserOnSecondary(emailOrObj, pwdMaybe) {
     await deleteApp(secondaryApp);
   } catch {}
 
-  // نعيد شكلًا متوافقًا مع الاستعمالات الحالية
   return { user: cred.user, uid: cred.user.uid, email: cred.user.email };
 }
 
@@ -144,7 +147,6 @@ export async function deleteSecondaryUser(userMaybe) {
       await deleteApp(secondaryApp);
     } catch {}
   } catch (e) {
-    // فقط نسجل ولا نُسقط التطبيق
     console.error("Delete secondary user failed:", e);
   }
 }
@@ -165,8 +167,7 @@ export async function signOutSecondary(secondaryAuthArg, secondaryAppArg) {
         secondaryApp = getOrInitSecondaryApp();
         secondaryAuth = getAuth(secondaryApp);
       } catch {
-        // لا يوجد مثيل ثانوي — لا شيء نفعله
-        return;
+        return; // لا يوجد مثيل ثانوي — لا شيء نفعله
       }
     }
 
@@ -182,15 +183,105 @@ export async function signOutSecondary(secondaryAuthArg, secondaryAppArg) {
 }
 
 // ———————————————————————————————————————————
-// 🔗 هيلبرز الربط المتبادل Student ↔ Guardians
-// تحفظ فقط مصفوفة studentIds داخل وثيقة وليّ الأمر لسهولة الإضافة/الإزالة.
-// استخدمها بعد إنشاء/تعديل الطالب.
+// توليد publicId (أربع حروف + أربع أرقام) + فهرسة logins
 // ———————————————————————————————————————————
+function randomLetters4() {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  let s = "";
+  for (let i = 0; i < 4; i++) s += A[Math.floor(Math.random() * A.length)];
+  return s;
+}
+function randomDigits4() {
+  return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+}
 
 /**
- * يربط الطالب بعدة أولياء أمور (يضيف studentId إلى studentIds في كل Guardian).
- * آمنة لو كانت المصفوفة فارغة.
+ * assignPublicIdAndIndex
+ * - يولّد publicId فريد (مثال: ABCD1234) إن لم يكن موجودًا على الوثيقة
+ * - يكتب publicId + role داخل وثيقة المستخدم (collection/uid)
+ * - ينشئ/يحدّث فهرس دخول في logins/{publicId} عند index=true
+ *
+ * يعيد publicId النهائي.
  */
+export async function assignPublicIdAndIndex({
+  uid,
+  role,
+  col,
+  email = null,
+  phone = null,
+  displayName = "",
+  index = true,
+}) {
+  if (!uid || !col || !role) throw new Error("assignPublicIdAndIndex: uid/col/role مطلوبة.");
+
+  const userRef = doc(db, col, uid);
+  const snap = await getDoc(userRef);
+  let existing = snap.exists() ? (snap.data().publicId || "") : "";
+
+  // ابحث عن كود فريد إذا لم يوجد مسبقًا
+  let publicId = existing;
+  if (!publicId) {
+    for (let i = 0; i < 30; i++) {
+      const cand = `${randomLetters4()}${randomDigits4()}`;
+      const idxSnap = await getDoc(doc(db, "logins", cand));
+      if (!idxSnap.exists()) {
+        publicId = cand;
+        break;
+      }
+    }
+    if (!publicId) throw new Error("تعذر توليد publicId فريد.");
+  }
+
+  // اكتب publicId + role في وثيقة المستخدم
+  await setDoc(
+    userRef,
+    { publicId, role, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+
+  // فهرس الدخول (يُستخدم لتحديد نوع الحساب عند دخول التطبيق)
+  if (index) {
+    await setDoc(
+      doc(db, "logins", publicId),
+      {
+        uid,
+        role,
+        col,
+        email: email || null,
+        phone: phone || null,
+        displayName: displayName || "",
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  return publicId;
+}
+
+/** إزالة فهرس publicId (للتنظيف عند الفشل) */
+export async function removePublicIdIndex(publicId) {
+  if (!publicId) return;
+  try {
+    await deleteDoc(doc(db, "logins", publicId));
+  } catch {}
+}
+
+/** حذف عدة مسارات من Storage (مفيد للتراجع عند فشل الإنشاء) */
+export async function deleteStoragePaths(paths = []) {
+  await Promise.all(
+    (paths || []).map((p) =>
+      deleteObject(ref(storage, p)).catch(() => {})
+    )
+  );
+}
+
+// ———————————————————————————————————————————
+// 🔗 هيلبرز الربط المتبادل Student ↔ Guardians
+// تحفظ فقط مصفوفة studentIds داخل وثيقة وليّ الأمر لسهولة الإضافة/الإزالة.
+// ———————————————————————————————————————————
+
+/** يربط الطالب بعدة أولياء أمور (يضيف studentId إلى studentIds في كل Guardian). */
 export async function linkStudentToGuardians({ studentId, guardianIds = [] }) {
   if (!studentId || !Array.isArray(guardianIds) || guardianIds.length === 0) return;
 
@@ -198,7 +289,6 @@ export async function linkStudentToGuardians({ studentId, guardianIds = [] }) {
   for (const gid of guardianIds) {
     if (!gid) continue;
     const gRef = doc(db, "guardians", gid);
-    // setDoc مع merge يسمح بالإنشاء إن لم توجد الوثيقة
     batch.set(
       gRef,
       {
@@ -211,10 +301,7 @@ export async function linkStudentToGuardians({ studentId, guardianIds = [] }) {
   await batch.commit();
 }
 
-/**
- * يفكّ الربط عن عدة أولياء (يزيل studentId من studentIds).
- * آمنة لو لم تكن القيمة موجودة أصلاً.
- */
+/** يفكّ الربط عن عدة أولياء (يزيل studentId من studentIds). */
 export async function unlinkStudentFromGuardians({ studentId, guardianIds = [] }) {
   if (!studentId || !Array.isArray(guardianIds) || guardianIds.length === 0) return;
 
@@ -238,7 +325,6 @@ export async function unlinkStudentFromGuardians({ studentId, guardianIds = [] }
  * يستبدل مجموعة الروابط بالكامل:
  * - يضيف studentId إلى newIds غير الموجودة سابقًا
  * - يزيله من oldIds التي لم تعد مطلوبة
- * مرّر لنا القائمتين (عادة من واجهة التحرير).
  */
 export async function replaceStudentGuardianRefs({
   studentId,

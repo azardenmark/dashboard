@@ -14,12 +14,6 @@ import {
 import { useNavigate } from "react-router-dom";
 import "./UsersTable.css";
 
-
-/* =========================
-   إعدادات/ثوابت العرض
-========================= */
-
-// أسماء المجموعات في Firestore حسب الدور
 const ROLE_TO_COLLECTION = {
   guardian: "guardians",
   teacher: "teachers",
@@ -27,7 +21,6 @@ const ROLE_TO_COLLECTION = {
   student: "students",
 };
 
-// ترجمة الدور للعرض
 const ROLE_LABEL = {
   guardian: "وليّ أمر",
   teacher: "معلّم",
@@ -35,7 +28,6 @@ const ROLE_LABEL = {
   student: "طالب",
 };
 
-// لون لكل دور (chips)
 const ROLE_CLASS = {
   guardian: "role-chip role-guardian",
   teacher: "role-chip role-teacher",
@@ -43,7 +35,6 @@ const ROLE_CLASS = {
   student: "role-chip role-student",
 };
 
-// يحوّل الأرقام العربية/الفارسية إلى لاتينية للبحث
 function normalizeDigits(str = "") {
   const map = {
     "٠": "0","١": "1","٢": "2","٣": "3","٤": "4",
@@ -54,17 +45,12 @@ function normalizeDigits(str = "") {
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
 
-// اختصار اسم (أول حرفين) لصورة افتراضية
 function initials(name = "") {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
   const first = parts[0]?.[0] ?? "";
   const last  = parts[1]?.[0] ?? "";
   return (first + last).toUpperCase() || "👤";
 }
-
-/* =========================
-   أنماط Inline للحوارات (مركز الشاشة)
-========================= */
 
 const modalStyles = {
   backdrop: {
@@ -115,11 +101,16 @@ const modalStyles = {
     fontSize: 12,
     color: "#94a3b8",
   },
+  pid: {
+    padding: "4px 8px",
+    background: "#0f172a",
+    border: "1px solid #375078",
+    borderRadius: 8,
+    fontFamily: "monospace",
+    fontSize: 12,
+    color: "#a5b4fc",
+  },
 };
-
-/* =========================
-   مكوّنات واجهة عامة (Modal + Confirm)
-========================= */
 
 function Modal({ open, title, children, onClose, actions }) {
   if (!open) return null;
@@ -166,32 +157,24 @@ function Confirm({ open, title="تأكيد", message, confirmText="نعم، مت
   );
 }
 
-/* =========================
-   صفحة المستخدمين
-========================= */
-
 export default function Users() {
-  const [rows, setRows] = useState([]);     // بيانات موحدة من كل المجموعات
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
-  // فلاتر
-  const [role, setRole] = useState("all");      // all | guardian | teacher | driver | student
-  const [status, setStatus] = useState("all");  // all | active | inactive
-  const [q, setQ] = useState("");               // بحث عام
+  const [role, setRole] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [q, setQ] = useState("");
 
-  // تحرير عبر نافذة منبثقة
-  const [editing, setEditing] = useState(null);      // الصف الجاري تحريره
-  const [form, setForm] = useState(null);            // قيم النافذة
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // تأكيد الحذف
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
   const navigate = useNavigate();
 
-  // إحضار حيّ (Real-time) لكل المجموعات
   useEffect(() => {
     setLoading(true);
     setErr("");
@@ -206,7 +189,6 @@ export default function Users() {
       const qRef = query(collection(db, col), orderBy("firstName"));
       return onSnapshot(qRef, (snap) => {
         setRows((prev) => {
-          // احذف بيانات هذا الكولكشن أولًا ثم أضف الجديدة
           const others = prev.filter(r => r.role !== role);
           const add = snap.docs.map(d => {
             const data = d.data() || {};
@@ -223,6 +205,8 @@ export default function Users() {
               avatarUrl: data.photoURL || data.avatarUrl || "",
               gender: data.gender || "",
               createdAt: data.createdAt || null,
+              publicId: data.publicId || "",         // ✅ جديد
+              studentCode: data.code || "",          // لطلابك الحاليين
               raw: data,
             };
           });
@@ -233,20 +217,17 @@ export default function Users() {
         setLoading(false);
       }, (e) => {
         if (e?.code === "permission-denied") {
-    console.warn(`[Firestore] لا صلاحية لقراءة ${col}:`, e.message);
-    // أظهر ملاحظة لطيفة مرة واحدة فقط
-    setErr(prev => prev || "⚠️ بعض المجموعات محمية (permission-denied). عدّل القواعد أو تجاهلها من الواجهة.");
-  } else {
-    setErr(e?.message || "فشل الاشتراك في التغييرات.");
-  }
-  setLoading(false);
+          setErr(prev => prev || "⚠️ بعض المجموعات محمية (permission-denied). عدّل القواعد أو تجاهلها من الواجهة.");
+        } else {
+          setErr(e?.message || "فشل الاشتراك في التغييرات.");
+        }
+        setLoading(false);
       });
     });
 
     return () => unsubs.forEach(u => u && u());
   }, []);
 
-  // الفلترة/البحث
   const filtered = useMemo(() => {
     const key = normalizeDigits(q).toLowerCase().trim();
     return rows.filter((r) => {
@@ -257,12 +238,11 @@ export default function Users() {
         if (status === "inactive" && isActive) return false;
       }
       if (!key) return true;
-      const hay = [r.fullName, r.email, r.phone].join(" ").toLowerCase();
+      const hay = [r.fullName, r.email, r.phone, r.publicId, r.studentCode].join(" ").toLowerCase(); // ✅ يشمل publicId و code
       return hay.includes(key);
     });
   }, [rows, role, status, q]);
 
-  // تقسيم الصفحات
   const [perPage, setPerPage] = useState(15);
   const [page, setPage] = useState(1);
   const total = filtered.length;
@@ -271,9 +251,6 @@ export default function Users() {
   const start = (curPage - 1) * perPage;
   const pageRows = filtered.slice(start, start + perPage);
 
-  /* ====== إجراءات الصف ====== */
-
-  // زر تفعيل/إيقاف
   async function toggleActive(row) {
     try {
       await updateDoc(row.ref, { active: !row.active, updatedAt: serverTimestamp() });
@@ -282,11 +259,7 @@ export default function Users() {
     }
   }
 
-  // زر حذف (يفتح تأكيد)
-  function askDelete(row) {
-    setToDelete(row);
-  }
-
+  function askDelete(row) { setToDelete(row); }
   async function confirmDelete() {
     if (!toDelete) return;
     try {
@@ -300,7 +273,6 @@ export default function Users() {
     }
   }
 
-  // زر تعديل (يفتح النافذة المنبثقة)
   function openEdit(row) {
     setEditing(row);
     setForm({
@@ -313,26 +285,14 @@ export default function Users() {
       active   : row.active === true,
     });
   }
-
-  function closeEdit() {
-    setEditing(null);
-    setForm(null);
-    setSaving(false);
-  }
-
-  function setF(k, v) {
-    setForm((prev) => ({ ...prev, [k]: v }));
-  }
+  function closeEdit() { setEditing(null); setForm(null); setSaving(false); }
+  function setF(k, v) { setForm((prev) => ({ ...prev, [k]: v })); }
 
   async function saveEdit() {
     if (!editing || !form) return;
-    // تحقق بسيط
     const fn = form.firstName.trim();
     const ln = form.lastName.trim();
-    if (!fn || !ln) {
-      alert("الاسم والكنية مطلوبة.");
-      return;
-    }
+    if (!fn || !ln) { alert("الاسم والكنية مطلوبة."); return; }
     try {
       setSaving(true);
       await updateDoc(editing.ref, {
@@ -353,14 +313,13 @@ export default function Users() {
   }
 
   function openStudentAdvanced(row) {
-    // يفتح صفحة الطالب للتعديل الكامل ثم يعيدك للائحة
     navigate(`/people/student?id=${row.id}`);
   }
 
-  /* ====== تصدير CSV ====== */
   function exportCSV() {
     const rowsForCsv = filtered.map(r => ({
       id: r.id,
+      publicId: r.publicId || "",                              // ✅
       role: ROLE_LABEL[r.role] || r.role,
       fullName: r.fullName,
       email: r.email,
@@ -369,12 +328,13 @@ export default function Users() {
       address: r.address,
       active: r.active ? "Active" : "Inactive",
       ...(r.role === "student" ? {
+        studentCode: r.studentCode || "",
         kindergarten: r.raw.kindergartenName || "",
         branch: r.raw.branchName || "",
         klass: r.raw.className || "",
       } : {})
     }));
-    const header = Object.keys(rowsForCsv[0] || {id:"",role:"",fullName:"",email:"",phone:"",gender:"",address:"",active:""});
+    const header = Object.keys(rowsForCsv[0] || {id:"",publicId:"",role:"",fullName:"",email:"",phone:"",gender:"",address:"",active:""});
     const lines = [header.join(","), ...rowsForCsv.map(o => header.map(k => `"${String(o[k] ?? "").replace(/"/g,'""')}"`).join(","))];
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -384,8 +344,6 @@ export default function Users() {
     a.click();
     URL.revokeObjectURL(url);
   }
-
-  /* ====== العرض ====== */
 
   return (
     <div className="ut-wrap">
@@ -406,7 +364,7 @@ export default function Users() {
         </div>
         <input
           className="ut-search-input"
-          placeholder="بحث بالاسم / البريد / الهاتف…"
+          placeholder="بحث بالاسم / البريد / الهاتف / الكود…"
           value={q}
           onChange={(e) => { setQ(e.target.value); setPage(1); }}
         />
@@ -435,7 +393,6 @@ export default function Users() {
         </div>
       </div>
 
-      {/* رسائل */}
       {err && <div className="ut-error">⚠️ {err}</div>}
 
       {/* الجدول */}
@@ -446,6 +403,7 @@ export default function Users() {
           <div className="th">الحالة</div>
           <div className="th">رقم الهاتف</div>
           <div className="th">البريد الإلكتروني</div>
+          <div className="th">الكود</div> {/* ✅ عمود الكود */}
           <div className="th th-actions">إجراءات</div>
         </div>
 
@@ -455,12 +413,9 @@ export default function Users() {
           <div className="ut-empty">لا توجد سجلات مطابقة.</div>
         ) : (
           pageRows.map((r) => {
-            // سطر العنوان الفرعي: للطالب أعرض مسار الصف، لغيره أعرض العنوان
             const sub =
               r.role === "student"
-                ? [r.raw.kindergartenName, r.raw.branchName, r.raw.className]
-                    .filter(Boolean)
-                    .join(" / ")
+                ? [r.raw.kindergartenName, r.raw.branchName, r.raw.className].filter(Boolean).join(" / ")
                 : (r.address || "");
             return (
               <div key={`${r.role}:${r.id}`} className="ut-row">
@@ -506,6 +461,14 @@ export default function Users() {
                   </a>
                 </div>
 
+                {/* عمود الكود */}
+                <div className="td">
+                  {r.publicId ? <span className="code-chip">{r.publicId}</span> : "—"}
+                  {r.role === "student" && r.studentCode ? (
+                    <span className="sub" style={{display:"block", opacity:.7, marginTop:2}}>رمز الطالب: {r.studentCode}</span>
+                  ) : null}
+                </div>
+
                 <div className="td td-actions">
                   <button className="icon-btn" title="تعديل" onClick={()=>openEdit(r)}>✏️</button>
                   <button className="icon-btn danger" title="حذف" onClick={()=>askDelete(r)}>🗑️</button>
@@ -540,7 +503,6 @@ export default function Users() {
         title={editing ? `تعديل: ${editing.fullName}` : ""}
         actions={
           <>
-            {/* زر يظهر فقط للطلاب للتعديل الموسّع */}
             {editing?.role === "student" && (
               <button
                 className="btn"
@@ -552,6 +514,8 @@ export default function Users() {
               </button>
             )}
             <span style={{flex:1}} />
+            {/* عرض UID و PublicId للقراءة فقط */}
+            <span style={modalStyles.pid} title="الكود العام">CODE: {editing?.publicId || "-"}</span>
             <span style={modalStyles.uid} title="UID في Firestore">UID: {editing?.id || "-"}</span>
             <button className="btn" onClick={closeEdit} disabled={saving}>إلغاء</button>
             <button className="btn btn--primary" onClick={saveEdit} disabled={saving}>
@@ -601,7 +565,6 @@ export default function Users() {
               <input className="ap-input" value={form.address} onChange={e=>setF("address", e.target.value)} />
             </div>
 
-            {/* معلومات إضافية للطلاب للعرض (قراءة فقط) */}
             {editing?.role === "student" && (
               <div className="ap-field ap-span-2">
                 <div className="ap-note">

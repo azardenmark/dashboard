@@ -2,17 +2,18 @@
 import React, { useState } from "react";
 import "./FormStyles.css";
 
-// Firebase (نستخدم المثيل الثانوي + التخزين)
 import {
+  db,
   storage,
   createUserOnSecondary,
   signOutSecondary,
   deleteSecondaryUser,
+  assignPublicIdAndIndex, // ✅
 } from "../firebase";
 import { saveToFirestore } from "../firebase";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { doc, deleteDoc } from "firebase/firestore";
 
-// يحوّل الأرقام العربية/الفارسية إلى لاتينية
 function normalizeDigits(str = "") {
   const map = {
     "٠": "0","١": "1","٢": "2","٣": "3","٤": "4",
@@ -26,19 +27,14 @@ function normalizeDigits(str = "") {
 function prettyFirebaseError(err) {
   if (!err?.code) return err.message || "حدث خطأ غير معروف";
   switch (err.code) {
-    case "auth/email-already-in-use":
-      return "هذا البريد مستخدم بالفعل.";
-    case "auth/weak-password":
-      return "كلمة المرور ضعيفة جداً.";
-    case "auth/invalid-email":
-      return "البريد الإلكتروني غير صالح.";
-    default:
-      return err.message || "فشل العملية.";
+    case "auth/email-already-in-use": return "هذا البريد مستخدم بالفعل.";
+    case "auth/weak-password":        return "كلمة المرور ضعيفة جداً.";
+    case "auth/invalid-email":        return "البريد الإلكتروني غير صالح.";
+    default:                          return err.message || "فشل العملية.";
   }
 }
 
 export default function AddTeacher() {
-  // الحقول
   const [firstName, setFirstName] = useState("");
   const [lastName,  setLastName]  = useState("");
   const [email,     setEmail]     = useState("");
@@ -48,34 +44,27 @@ export default function AddTeacher() {
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
-  // شهادات/ملفات متعددة (اختياري)
   const [files, setFiles] = useState([]); // File[]
 
-  // واجهة
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // أخطاء الحقول
   const [errors, setErrors] = useState({
     firstName: "", lastName: "", contact: "", password: "", confirm: ""
   });
 
-  // إظهار/إخفاء كلمات المرور
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // اختيار ملفات
   function onPickFiles(fileList) {
     if (!fileList?.length) return;
     setFiles((prev) => [...prev, ...Array.from(fileList)]);
   }
-  // حذف ملف من القائمة
   function removeFileAt(index) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  // رفع جميع الملفات إلى Storage وإرجاع ميتاداتا
   async function uploadCertificates(uid) {
     const uploaded = [];
     for (const f of files) {
@@ -94,7 +83,6 @@ export default function AddTeacher() {
     return uploaded;
   }
 
-  // تفريغ النموذج
   function resetForm() {
     setFirstName(""); setLastName(""); setEmail(""); setPhone("");
     setGender("male"); setAddress(""); setPassword(""); setConfirm("");
@@ -103,7 +91,6 @@ export default function AddTeacher() {
     setFormError(""); setSuccess("");
   }
 
-  // إرسال
   async function submit(e) {
     e.preventDefault();
     setFormError(""); setSuccess("");
@@ -120,45 +107,60 @@ export default function AddTeacher() {
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
 
-    let cred = null;
+    let uid = null;
+    let uploadedPaths = [];
+
     try {
       setLoading(true);
 
-      // 1) إنشاء المعلّم على المثيل الثانوي (لا يغيّر جلسة الأدمن)
-      // ✅ التصحيح: تمرير كائن { email, password } والاعتماد على أن createUserOnSecondary تُعيد user مباشرة
-      cred = await createUserOnSecondary({ email: email.trim(), password });
-      const uid = cred.uid; // ✅ بدلاً من cred.user.uid
+      // 1) Auth
+      const cred = await createUserOnSecondary({ email: email.trim(), password });
+      uid = cred.uid;
 
-      // 2) رفع الشهادات (اختياري)
+      // 2) رفع الملفات
       const certs = await uploadCertificates(uid);
+      uploadedPaths = certs.map(x => x.path);
 
-      try {
-        // 3) حفظ بيانات المعلّم في Firestore
-        await saveToFirestore("teachers", {
-          firstName: firstName.trim(),
-          lastName : lastName.trim(),
-          email    : email.trim(),
-          phone    : phoneNorm.trim(),
-          gender,
-          address  : address.trim() || null,
-          certificates: certs,
-          createdAt: new Date().toISOString(),
-        }, { id: uid });
+      // 3) Firestore
+      await saveToFirestore("teachers", {
+        role     : "teacher",
+        firstName: firstName.trim(),
+        lastName : lastName.trim(),
+        email    : email.trim(),
+        phone    : phoneNorm.trim(),
+        gender,
+        address  : address.trim() || null,
+        certificates: certs,
+        active   : true,
+        createdAt: new Date().toISOString(),
+      }, { id: uid });
 
-        setSuccess("✅ تم إنشاء حساب المعلّم وحفظ بياناته بنجاح.");
-        resetForm();
-      } catch (dbErr) {
-        // فشل الحفظ → نحذف المستخدم الذي أنشأناه (rollback)
-        console.error("Firestore save failed, rolling back user:", dbErr);
-        if (cred?.uid) await deleteSecondaryUser(); // ✅ بدون تمرير user
-        throw dbErr;
-      }
+      // 4) publicId + index
+      const publicId = await assignPublicIdAndIndex({
+        uid,
+        role: "teacher",
+        col : "teachers",
+        email: email.trim() || null,
+        phone: phoneNorm.trim() || null,
+        displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
+        index: true,
+      });
+
+      setSuccess(`✅ تم إنشاء حساب المعلّم بنجاح. الكود: ${publicId}`);
+      resetForm();
     } catch (err) {
       console.error(err);
+
+      // Rollback كامل
+      try { await deleteSecondaryUser(); } catch {/* تجاهل */}
+      for (const p of uploadedPaths) {
+        try { await deleteObject(ref(storage, p)); } catch {/* تجاهل */}
+      }
+      if (uid) { try { await deleteDoc(doc(db, "teachers", uid)); } catch {/* تجاهل */} }
+
       setFormError(prettyFirebaseError(err));
     } finally {
-      // تنظيف: نسجّل خروج المثيل الثانوي فقط — جلسة الأدمن تبقى
-      await signOutSecondary(); // ✅ بدون باراميترات
+      await signOutSecondary();
       setLoading(false);
     }
   }
