@@ -8,13 +8,35 @@ import {
   linkStudentToGuardians,
   assignPublicIdAndIndex,
 } from "../firebase";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  getDoc,
+  doc,
+  query,
+  where,
+  runTransaction,
+  orderBy,
+  serverTimestamp,
+} from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-/* ——— المحافظات السورية ——— */
-const PROVINCES = [
-  "دمشق","ريف دمشق","حلب","حمص","حماة","اللاذقية","طرطوس","إدلب",
-  "دير الزور","الرقة","الحسكة","درعا","السويداء","القنيطرة",
+/* ——— محافظات (fallback) ——— */
+const DEFAULT_PROVINCES = [
+  { id: "DAM", name: "دمشق", code: "DAM" },
+  { id: "RDI", name: "ريف دمشق", code: "RDI" },
+  { id: "ALE", name: "حلب", code: "ALE" },
+  { id: "HMS", name: "حمص", code: "HMS" },
+  { id: "HMA", name: "حماة", code: "HMA" },
+  { id: "LAZ", name: "اللاذقية", code: "LAZ" },
+  { id: "TAR", name: "طرطوس", code: "TAR" },
+  { id: "IDL", name: "إدلب", code: "IDL" },
+  { id: "DEZ", name: "دير الزور", code: "DEZ" },
+  { id: "RAQ", name: "الرقة", code: "RAQ" },
+  { id: "HAS", name: "الحسكة", code: "HAS" },
+  { id: "DRA", name: "درعا", code: "DRA" },
+  { id: "SWA", name: "السويداء", code: "SWA" },
+  { id: "QUN", name: "القنيطرة", code: "QUN" },
 ];
 
 /* ——— Utils ——— */
@@ -34,62 +56,112 @@ function pretty(err) {
 }
 const emptyParent = { name:"", phone:"", email:"", job:"", nationalId:"", notes:"" };
 
-// ————————————————————————————————————————————————————————————————
+/* ——— Helpers للرمز ——— */
+const pad4 = (n) => String(n).padStart(4, "0");
+const formatStudentCode = (provCode, kgCode, seq) => `${provCode}-${kgCode}-${pad4(seq)}`;
+
+function deriveKgCode(kg) {
+  const raw = (kg?.code || kg?.kgCode || "").toString().trim();
+  if (raw) return raw.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || "KGX";
+  return ((kg?.id || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4)) || "KGX";
+}
+
+async function previewNextStudentCode(db, kgId, provCode, kgCode) {
+  try {
+    const kgRef = doc(db, "kindergartens", kgId);
+    const snap = await getDoc(kgRef);
+    const next = ((snap.exists() ? (snap.data()?.studentSeq || 0) : 0) + 1);
+    return formatStudentCode(provCode, kgCode, next);
+  } catch { return ""; }
+}
+
+async function allocateStudentCode(db, kgId, provCode, kgCode) {
+  const kgRef = doc(db, "kindergartens", kgId);
+  let seq = 0;
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(kgRef);
+    if (!snap.exists()) throw new Error("الروضة غير موجودة.");
+    const current = (snap.data()?.studentSeq || 0) + 1;
+    tx.update(kgRef, { studentSeq: current, updatedAt: serverTimestamp() });
+    seq = current;
+  });
+  return { code: formatStudentCode(provCode, kgCode, seq), seq };
+}
+
+// بديل إن فشل الترانزاكشن
+async function fallbackNextCode(db, kgId, provCode, kgCode) {
+  const qy = query(collection(db, "students"), where("kindergartenId", "==", kgId));
+  const snap = await getDocs(qy);
+  let maxSeq = 0;
+  snap.forEach(d => {
+    const s = Number(d.data()?.studentSeq || 0);
+    if (s > maxSeq) maxSeq = s;
+  });
+  const next = maxSeq + 1;
+  return { code: formatStudentCode(provCode, kgCode, next), seq: next };
+}
+
+/* ————————————————————————————————————————————————————————————————
+   الصفحة
+——————————————————————————————————————————————————————————————— */
 export default function AddStudent() {
+  console.log("[AddStudent] mount");
+
   // تبويب
   const [tab, setTab] = useState("profile"); // profile | health
 
   // أساسية
-  const [code, setCode]           = useState("");
+  const [code, setCode] = useState(""); // معاينة/قراءة فقط
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName]   = useState("");
-  const [dob, setDob]             = useState(""); // yyyy-mm-dd
+  const [dob, setDob]             = useState("");
   const [gender, setGender]       = useState("female");
   const [address, setAddress]     = useState("");
-  const [status, setStatus]       = useState("active"); // active | inactive
 
-  // حقول مطلوبة: أخطاء + مراجع للتركيز
-  const [errors, setErrors] = useState({ code:"", firstName:"", lastName:"" });
-  const refCode = useRef(null);
+  // أخطاء + مراجع
+  const [errors, setErrors] = useState({ firstName:"", lastName:"" });
   const refFirst = useRef(null);
-  const refLast = useRef(null);
+  const refLast  = useRef(null);
 
-  // المحافظة ← الروضة ← الفرع ← الصف
-  const [province, setProvince]   = useState("");
-  const [kgList, setKgList]       = useState([]); // {id,name,province}
-  const [kgId, setKgId]           = useState("");
-  const [branchList, setBranchList] = useState([]); // {id,name,parentId}
-  const [branchId, setBranchId]   = useState("");
-  const [classList, setClassList] = useState([]); // {id,name,parentId}
-  const [classId, setClassId]     = useState("");
+  // المحافظات
+  const [provinces, setProvinces] = useState(DEFAULT_PROVINCES);
+  const [provinceName, setProvinceName] = useState("");
+
+  // الروضة/الفرع/الصف
+  const [kgList, setKgList]           = useState([]);
+  const [kgId, setKgId]               = useState("");
+  const [branchList, setBranchList]   = useState([]);
+  const [branchId, setBranchId]       = useState("");
+  const [classList, setClassList]     = useState([]);
+  const [classId, setClassId]         = useState("");
 
   // السائق (اختياري)
-  const [driverList, setDriverList] = useState([]); // {id, firstName,lastName,phone}
-  const [driverId, setDriverId]     = useState("");
+  const [driverList, setDriverList]   = useState([]);
+  const [driverId, setDriverId]       = useState("");
 
   // صورة
   const [photoFile, setPhotoFile]     = useState(null);
   const [photoPreview, setPhotoPreview] = useState("");
 
-  // أولياء الأمور (من الحسابات الموجودة)
-  const [guardians, setGuardians]             = useState([]); // {id, fullName, email, phone}
-  const [gFilter, setGFilter]                 = useState("");
-  const [selectedGuardianIds, setSelectedGuardianIds] = useState([]); // قائمة مختارة
-  const [primaryGuardianId, setPrimaryGuardianId]     = useState("");
-  const [pickerOpen, setPickerOpen]           = useState(false);
+  // أولياء الأمور (+ مسؤول رئيسي)
+  const [guardians, setGuardians] = useState([]);
+  const [gFilter, setGFilter] = useState("");
+  const [selectedGuardianIds, setSelectedGuardianIds] = useState([]);
+  const [primaryGuardianId, setPrimaryGuardianId] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // نافذة تفاصيل الأب/الأم
-  const [father, setFather]       = useState({ ...emptyParent });
-  const [mother, setMother]       = useState({ ...emptyParent });
-  const [parentModal, setParentModal] = useState(null); // 'father' | 'mother' | null
+  const [father, setFather] = useState({ ...emptyParent });
+  const [mother, setMother] = useState({ ...emptyParent });
+  const [parentModal, setParentModal] = useState(null);
   const [parentDraft, setParentDraft] = useState({ ...emptyParent });
 
-  // صحة
+  // صحة (بعد التعديل)
   const [health, setHealth] = useState({
-    heightCm:"", weightKg:"", bloodGroup:"Unknown",
-    allergy:"", chronic:"", medications:"", vaccinationsUpToDate:false,
-    doctorName:"", doctorPhone:"", lastCheckup:"", dietNotes:"",
-    vision:""
+    heightCm:"", weightKg:"", bloodGroup:"",
+    allergy:"", chronic:"", medications:"",
+    hearingIssues:"", vision:"", otherIssues:"",
+    dietNotes:""
   });
 
   // واجهة
@@ -97,8 +169,25 @@ export default function AddStudent() {
   const [formError, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // ————— تحميل القوائم —————
+  /* ————— تحميل القوائم ————— */
   useEffect(() => {
+    // Provinces
+    (async () => {
+      try {
+        const ps = await getDocs(query(collection(db, "provinces"), orderBy("name")));
+        const arr = [];
+        ps.forEach(d => {
+          const x = d.data() || {};
+          arr.push({ id: x.code || d.id, name: x.name || d.id, code: x.code || d.id });
+        });
+        setProvinces(arr.length ? arr : DEFAULT_PROVINCES);
+        console.log("[AddStudent] provinces:", arr.length || DEFAULT_PROVINCES.length);
+      } catch (e) {
+        console.warn("[AddStudent] provinces fallback", e?.message || e);
+        setProvinces(DEFAULT_PROVINCES);
+      }
+    })();
+
     // Guardians
     (async () => {
       try {
@@ -115,7 +204,10 @@ export default function AddStudent() {
         });
         arr.sort((a,b)=>a.fullName.localeCompare(b.fullName, "ar"));
         setGuardians(arr);
-      } catch (e) { /* تجاهل */ }
+        console.log("[AddStudent] guardians:", arr.length);
+      } catch (e) {
+        console.warn("[AddStudent] guardians load failed:", e?.message || e);
+      }
     })();
 
     // Kindergartens
@@ -126,52 +218,109 @@ export default function AddStudent() {
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setKgList(arr);
-      } catch (e) { /* تجاهل */ }
+        console.log("[AddStudent] kindergartens:", arr.length);
+      } catch (e) {
+        console.warn("[AddStudent] kindergartens load failed:", e?.message || e);
+      }
     })();
   }, []);
 
-  // تحميل الفروع والسائقين عند اختيار الروضة
+  // تحميل الفروع عند اختيار الروضة
   useEffect(() => {
-    setBranchList([]); setBranchId(""); setClassList([]); setClassId("");
+    setBranchList([]); setBranchId("");
+    setClassList([]); setClassId("");
     setDriverList([]); setDriverId("");
     if (!kgId) return;
     (async () => {
       try {
-        // الفروع لدينا parentId = kgId
         const qy = query(collection(db, "branches"), where("parentId","==",kgId));
         const snap = await getDocs(qy);
         const arr = [];
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setBranchList(arr);
-      } catch (e) { /* تجاهل */ }
-
-      try {
-        // السائقون المرتبطون بهذه الروضة
-        const qd = query(collection(db, "drivers"), where("kgId","==",kgId));
-        const ds = await getDocs(qd);
-        const arrD = [];
-        ds.forEach(d => arrD.push({ id:d.id, ...(d.data()||{}) }));
-        arrD.sort((a,b)=>([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
-        setDriverList(arrD);
-      } catch (e) { /* تجاهل */ }
+        console.log("[AddStudent] branches for kg", kgId, ":", arr.length);
+      } catch (e) {
+        console.warn("[AddStudent] branches load failed:", e?.message || e);
+      }
     })();
   }, [kgId]);
 
-  // تحميل الصفوف عند اختيار الفرع (وإلا صفوف الروضة)
+  // تحميل الصفوف عند اختيار الفرع (أو صفوف الروضة إذا لا فرع)
   useEffect(() => {
     setClassList([]); setClassId("");
     if (!kgId) return;
     (async () => {
       try {
-        const parent = branchId || kgId; // صفوف الفرع أو الروضة
+        const parent = branchId || kgId;
         const qy = query(collection(db, "classes"), where("parentId","==", parent));
         const snap = await getDocs(qy);
         const arr = [];
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setClassList(arr);
-      } catch (e) { /* تجاهل */ }
+        console.log("[AddStudent] classes for", parent, ":", arr.length);
+      } catch (e) {
+        console.warn("[AddStudent] classes load failed:", e?.message || e);
+      }
+    })();
+  }, [kgId, branchId]);
+
+  // السائقون: من الفرع أولاً، ثم من الروضة، ثم fallback حسب kgId
+  useEffect(() => {
+    setDriverList([]); setDriverId("");
+    if (!kgId) return;
+
+    (async () => {
+      try {
+        let driverIds = [];
+
+        // 1) من الفرع
+        if (branchId) {
+          const bSnap = await getDoc(doc(db, "branches", branchId));
+          if (bSnap.exists()) driverIds = bSnap.data()?.driverIds || [];
+          console.log("[AddStudent] drivers from branch:", driverIds.length);
+        }
+
+        // 2) إن لم يوجد في الفرع → من الروضة
+        if (!driverIds.length) {
+          const kSnap = await getDoc(doc(db, "kindergartens", kgId));
+          if (kSnap.exists()) driverIds = kSnap.data()?.driverIds || [];
+          console.log("[AddStudent] drivers from kg:", driverIds.length);
+        }
+
+        // 3) fallback: query by kgId
+        if (!driverIds.length) {
+          const qd = query(collection(db, "drivers"), where("kgId","==",kgId));
+          const ds = await getDocs(qd);
+          const arr = [];
+          ds.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
+          if (arr.length) {
+            arr.sort((a,b)=>([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
+            setDriverList(arr);
+            console.log("[AddStudent] drivers fallback list:", arr.length);
+            return;
+          }
+        }
+
+        // 4) جلب حسب المعرّفات
+        if (!driverIds.length) { setDriverList([]); return; }
+        const drivers = await Promise.all(
+          driverIds.map(async (id) => {
+            const s = await getDoc(doc(db, "drivers", id));
+            if (!s.exists()) return null;
+            return { id:s.id, ...(s.data()||{}) };
+          })
+        );
+        const list = drivers
+          .filter(Boolean)
+          .sort((a,b)=> ([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
+        setDriverList(list);
+        console.log("[AddStudent] drivers final list:", list.length);
+      } catch (e) {
+        console.warn("[AddStudent] drivers load failed:", e?.message || e);
+        setDriverList([]);
+      }
     })();
   }, [kgId, branchId]);
 
@@ -184,7 +333,41 @@ export default function AddStudent() {
     r.readAsDataURL(file);
   }
 
-  // القوائم المفلترة
+  // المحافظة الحالية
+  const currentProvince = useMemo(
+    () => provinces.find(p => p.name === provinceName) || null,
+    [provinceName, provinces]
+  );
+
+  // ترشيح الروضات حسب المحافظة
+  const kgFiltered = useMemo(() => {
+    if (!currentProvince) return kgList;
+    const code = currentProvince.code;
+    const name = currentProvince.name;
+    return kgList.filter(k =>
+      (k.provinceCode && k.provinceCode === code) ||
+      (k.provinceName && k.provinceName === name) ||
+      (k.province && k.province === name)
+    );
+  }, [kgList, currentProvince]);
+
+  // معاينة الرمز عند اختيار المحافظة + الروضة
+  useEffect(() => {
+    (async () => {
+      setCode("");
+      if (!kgId || !currentProvince) return;
+      const kg = kgList.find(x => x.id === kgId);
+      if (!kg) return;
+      const kgCode = deriveKgCode(kg);
+      const provCode = currentProvince.code;
+      const preview = await previewNextStudentCode(db, kgId, provCode, kgCode);
+      setCode(preview || "");
+      console.log("[AddStudent] code preview:", preview);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kgId, currentProvince?.code]);
+
+  // حارسون مفلترون
   const filteredGuardians = useMemo(() => {
     const key = normalizeDigits(gFilter).toLowerCase().trim();
     if (!key) return guardians;
@@ -194,48 +377,43 @@ export default function AddStudent() {
     });
   }, [gFilter, guardians]);
 
-  // ترشيح الروضات بالمحافظة
-  const kgFiltered = useMemo(() => {
-    if (!province) return kgList;
-    return kgList.filter(k => (k.province || "") === province);
-  }, [kgList, province]);
-
-  // التحقق الخفيف + تركيز على أول حقل ناقص
+  // تحقق بسيط
   function validate() {
     const next = {
-      code: code.trim() ? "" : "رمز الطالب مطلوب",
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
-      lastName: lastName.trim() ? "" : "الكنية مطلوبة",
+      lastName : lastName.trim()  ? "" : "الكنية مطلوبة",
     };
     setErrors(next);
-
-    if (next.code) { setTab("profile"); setTimeout(()=>refCode.current?.focus(), 0); return false; }
-    if (next.firstName) { setTab("profile"); setTimeout(()=>refFirst.current?.focus(), 0); return false; }
-    if (next.lastName) { setTab("profile"); setTimeout(()=>refLast.current?.focus(), 0); return false; }
-
+    if (next.firstName) { setTab("profile"); setTimeout(()=>refFirst.current?.focus(),0); return false; }
+    if (next.lastName)  { setTab("profile"); setTimeout(()=>refLast.current?.focus(),0);  return false; }
+    if (!currentProvince) { setError("اختر المحافظة."); setTab("profile"); return false; }
+    if (!kgId)            { setError("اختر الروضة.");   setTab("profile"); return false; }
     return true;
   }
 
   // تفريغ
   function resetForm() {
+    console.log("[AddStudent] reset form");
     setTab("profile");
     setCode(""); setFirstName(""); setLastName(""); setDob("");
-    setGender("female"); setAddress(""); setStatus("active");
-    setErrors({ code:"", firstName:"", lastName:"" });
+    setGender("female"); setAddress("");
+    setErrors({ firstName:"", lastName:"" });
 
-    setProvince(""); setKgId(""); setBranchId(""); setClassId("");
+    setProvinceName(""); setKgId(""); setBranchId(""); setClassId("");
     setBranchList([]); setClassList([]);
     setDriverList([]); setDriverId("");
 
     setPhotoFile(null); setPhotoPreview("");
     setSelectedGuardianIds([]); setPrimaryGuardianId(""); setGFilter("");
     setFather({ ...emptyParent }); setMother({ ...emptyParent });
+
     setHealth({
-      heightCm:"", weightKg:"", bloodGroup:"Unknown",
-      allergy:"", chronic:"", medications:"", vaccinationsUpToDate:false,
-      doctorName:"", doctorPhone:"", lastCheckup:"", dietNotes:"",
-      vision:""
+      heightCm:"", weightKg:"", bloodGroup:"",
+      allergy:"", chronic:"", medications:"",
+      hearingIssues:"", vision:"", otherIssues:"",
+      dietNotes:""
     });
+
     setError(""); setSuccess("");
   }
 
@@ -244,41 +422,67 @@ export default function AddStudent() {
     e.preventDefault();
     setError(""); setSuccess("");
     if (loading) return;
-
     if (!validate()) return;
 
     try {
       setLoading(true);
+      console.log("[AddStudent] start save");
 
-      const kg = kgList.find(x=>x.id===kgId) || {};
-      const br = branchList.find(x=>x.id===branchId) || {};
-      const cl = classList.find(x=>x.id===classId) || {};
+      const kg  = kgList.find(x=>x.id===kgId) || {};
+      const br  = branchList.find(x=>x.id===branchId) || {};
+      const cl  = classList.find(x=>x.id===classId) || {};
       const drv = driverList.find(x=>x.id===driverId) || null;
 
       const primary  = guardians.find(g=>g.id===primaryGuardianId) || null;
       const guardianIds = Array.from(new Set(selectedGuardianIds));
 
+      const provCode = currentProvince?.code || "";
+      const provName = currentProvince?.name || "";
+      const kgCode   = deriveKgCode(kg);
+
+      // احجز الرمز (مع fallback)
+      let finalCode = "";
+      let seq = 0;
+      try {
+        const r = await allocateStudentCode(db, kgId, provCode, kgCode);
+        finalCode = r.code; seq = r.seq;
+        console.log("[AddStudent] code allocated (tx):", finalCode, seq);
+      } catch (ee) {
+        console.warn("[AddStudent] allocate failed → fallback", ee?.message || ee);
+        const r = await fallbackNextCode(db, kgId, provCode, kgCode);
+        finalCode = r.code; seq = r.seq;
+        console.log("[AddStudent] code allocated (fallback):", finalCode, seq);
+      }
+
       const base = {
         role: "student",
-        code: code.trim(),
+
+        // نعمل برمز واحد فقط (وسنجعله أيضًا publicId لسهولة البحث والعرض)
+        code: finalCode,
+        publicId: finalCode,
+
+        studentSeq: seq,
+        provinceName: provName,
+        provinceCode: provCode,
+        kindergartenCode: kgCode,
+
         firstName: firstName.trim(),
         lastName : lastName.trim(),
         dob      : dob || null,
         gender,
         address  : address.trim() || "",
-        status,
-        active   : status === "active",
+        active   : true, // إدارة الحالة من شاشة المستخدمين
 
         // الربط
         primaryGuardianId: primaryGuardianId || null,
         guardianIds,
 
-        // ننسخ بريد/هاتف من الحساب الرئيسي إن وُجد
+        // نسخ من الحساب الرئيسي (إن وجد)
         phone: primary?.phone || null,
         email: primary?.email || null,
 
         // المحافظة + الروضة ← الفرع ← الصف
-        province: province || kg?.province || "",
+        province: provName || kg?.province || "",
         kindergartenId: kgId || null,
         kindergartenName: kg?.name || "",
         branchId: branchId || null,
@@ -286,39 +490,36 @@ export default function AddStudent() {
         classId: classId || null,
         className: cl?.name || "",
 
-        // السائق (اختياري)
+        // السائق
         driverId: driverId || null,
         driverName: drv ? [drv.firstName, drv.lastName].filter(Boolean).join(" ").trim() : "",
         driverPhone: drv?.phone || "",
 
         // الأبوين
-        parents: {
-          father: { ...father },
-          mother: { ...mother },
-        },
+        parents: { father: { ...father }, mother: { ...mother } },
 
         // الصحة
         health: {
           heightCm: health.heightCm || null,
           weightKg: health.weightKg || null,
-          bloodGroup: health.bloodGroup || "Unknown",
+          bloodGroup: health.bloodGroup || "",
           allergy: health.allergy || "",
           chronic: health.chronic || "",
           medications: health.medications || "",
-          vaccinationsUpToDate: !!health.vaccinationsUpToDate,
-          doctorName: health.doctorName || "",
-          doctorPhone: health.doctorPhone || "",
-          lastCheckup: health.lastCheckup || null,
-          dietNotes: health.dietNotes || "",
+          hearingIssues: health.hearingIssues || "",
           vision: health.vision || "",
+          otherIssues: health.otherIssues || "",
+          dietNotes: health.dietNotes || "",
         },
+
         createdAt: new Date().toISOString(),
       };
 
       // 1) إنشاء وثيقة الطالب
       const { id } = await saveToFirestore("students", base);
+      console.log("[AddStudent] student created:", id);
 
-      // 2) توليد/تعيين publicId (بدون فهرسة لتسجيل الدخول)
+      // 2) publicId (لا ننشئ كودًا إضافيًا - نستخدم نفس رمز الطالب)
       await assignPublicIdAndIndex({
         uid: id,
         role: "student",
@@ -328,35 +529,427 @@ export default function AddStudent() {
         displayName: `${base.firstName} ${base.lastName}`.trim(),
         index: false,
       });
+      console.log("[AddStudent] publicId assigned");
 
-      // 3) ربط الطالب المختار مع أولياء الأمور (studentIds داخل وثائق guardians)
-      await linkStudentToGuardians({
-        studentId: id,
-        guardianIds,
-      });
+      // 3) ربط الطالب مع أولياء الأمور
+      await linkStudentToGuardians({ studentId: id, guardianIds });
+      console.log("[AddStudent] guardians linked:", guardianIds.length);
 
-      // 4) رفع الصورة (اختياري)
+      // 4) رفع الصورة (خلف الكواليس كي لا يظل الزر «جاري الحفظ…»)
       if (photoFile) {
-        const path = `students/${id}/avatar_${Date.now()}_${photoFile.name}`;
-        const r = ref(storage, path);
-        await uploadBytes(r, photoFile);
-        const url = await getDownloadURL(r);
-        await saveToFirestore("students", { photoURL: url }, { id, merge: true });
+        const _id = id;
+        const _photo = photoFile;
+        const path = `students/${_id}/avatar_${Date.now()}_${_photo.name}`;
+        console.log("[AddStudent] photo upload scheduled:", path);
+
+        (async () => {
+          try {
+            const r = ref(storage, path);
+            const timeout = new Promise((_, rej) =>
+              setTimeout(() => rej(new Error("upload-timeout")), 20000)
+            );
+            const uploadTask = (async () => {
+              const snap = await uploadBytes(r, _photo);
+              const url  = await getDownloadURL(snap.ref);
+              await saveToFirestore("students", { photoURL: url }, { id: _id, merge: true });
+              console.log("[AddStudent] photo uploaded & url saved");
+            })();
+            await Promise.race([uploadTask, timeout]);
+          } catch (e) {
+            console.warn("[AddStudent] photo upload skipped:", e?.message || e);
+          }
+        })();
       }
 
-      setSuccess("✅ تم إضافة الطالب وربط البيانات بنجاح.");
+      setSuccess(`✅ تم إضافة الطالب بنجاح. الرمز: ${finalCode}`);
+      console.log("[AddStudent] done successfully");
       resetForm();
     } catch (err) {
-      console.error(err);
+      console.error("[AddStudent] ERROR:", err);
       setError(pretty(err));
     } finally {
       setLoading(false);
+      console.log("[AddStudent] finalize");
     }
   }
 
   // ————— واجهة —————
   return (
     <div className="ap-page">
+      {/* رأس */}
+      <div className="ap-hero">
+        <h1 className="ap-hero__title">إضافة طالب</h1>
+        <p className="ap-hero__sub">املأ التبويبين ثم اضغط «إضافة الطالب». سيتم حفظ كل البيانات ضمن <b>students</b>.</p>
+      </div>
+
+      {/* تبويبات */}
+      <div className="ap-card" style={{marginBottom:10}}>
+        <div className="ap-card__head">
+          <div className="ap-tabs">
+            <button
+              type="button"
+              className={`ap-btn ${tab === "profile" ? "ap-btn--primary" : ""}`}
+              onClick={() => setTab("profile")}
+              style={{marginInlineEnd: 8}}
+            >
+              المعلومات الأساسية
+            </button>
+            <button
+              type="button"
+              className={`ap-btn ${tab === "health" ? "ap-btn--primary" : ""}`}
+              onClick={() => setTab("health")}
+            >
+              معلومات الصحة
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* بطاقة المحتوى - نموذج واحد يجمع التبويبين */}
+      <section className="ap-card">
+        <form className="ap-card__body ap-form" onSubmit={submit}>
+          {formError && <div className="ap-error" style={{marginBottom:8}}>⚠️ {formError}</div>}
+          {success   && <div className="ap-success" style={{marginBottom:8}}>{success}</div>}
+
+          {/* ——— التبويب الأساسي ——— */}
+          {tab === "profile" && (
+            <>
+              {/* الاسم والكنية جنبًا إلى جنب */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label><span className="ap-required">*</span> الاسم</label>
+                  <input
+                    ref={refFirst}
+                    className={`ap-input ${errors.firstName ? "ap-invalid":""}`}
+                    dir="auto"
+                    value={firstName}
+                    onChange={(e)=>setFirstName(e.target.value)}
+                    placeholder="الاسم"
+                  />
+                  {errors.firstName && <div className="ap-error">{errors.firstName}</div>}
+                </div>
+                <div className="ap-field">
+                  <label><span className="ap-required">*</span> الكنية</label>
+                  <input
+                    ref={refLast}
+                    className={`ap-input ${errors.lastName ? "ap-invalid":""}`}
+                    dir="auto"
+                    value={lastName}
+                    onChange={(e)=>setLastName(e.target.value)}
+                    placeholder="الكنية"
+                  />
+                  {errors.lastName && <div className="ap-error">{errors.lastName}</div>}
+                </div>
+              </div>
+
+              {/* الميلاد + الجنس */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>تاريخ الميلاد</label>
+                  <input className="ap-input" type="date" value={dob} onChange={(e)=>setDob(e.target.value)}/>
+                </div>
+                <div className="ap-field">
+                  <label>الجنس</label>
+                  <div className="ap-radio">
+                    <label><input type="radio" checked={gender==="female"} onChange={()=>setGender("female")} /> أنثى</label>
+                    <label><input type="radio" checked={gender==="male"} onChange={()=>setGender("male")} /> ذكر</label>
+                  </div>
+                </div>
+              </div>
+
+              {/* العنوان */}
+              <div className="ap-field">
+                <label>العنوان</label>
+                <input className="ap-input" dir="auto" placeholder="المدينة، الشارع…" value={address}
+                  onChange={(e)=>setAddress(e.target.value)}/>
+              </div>
+
+              {/* المحافظة + الروضة */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>المحافظة</label>
+                  <select
+                    className="ap-input"
+                    value={provinceName}
+                    onChange={(e)=>{ setProvinceName(e.target.value); setKgId(""); setBranchId(""); setClassId(""); setCode(""); }}
+                  >
+                    <option value="">— اختر —</option>
+                    {provinces.map(p => <option key={p.code} value={p.name}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div className="ap-field">
+                  <label>الروضة</label>
+                  <select
+                    className="ap-input"
+                    value={kgId}
+                    onChange={(e)=>setKgId(e.target.value)}
+                    disabled={!currentProvince || kgFiltered.length === 0}
+                  >
+                    <option value="">
+                      {!currentProvince
+                        ? "اختر المحافظة أولًا"
+                        : (kgFiltered.length ? "— اختر —" : "لا توجد روضات في هذه المحافظة")}
+                    </option>
+                    {currentProvince && kgFiltered.map(k => (
+                      <option key={k.id} value={k.id}>{k.name || k.id}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* الفرع + الصف */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>الفرع</label>
+                  <select className="ap-input" value={branchId} onChange={(e)=>setBranchId(e.target.value)} disabled={!kgId}>
+                    <option value="">{kgId ? "— بدون فرع / اختر —" : "اختر الروضة أولًا"}</option>
+                    {branchList.map(b=><option key={b.id} value={b.id}>{b.name || b.id}</option>)}
+                  </select>
+                </div>
+                <div className="ap-field">
+                  <label>الصف</label>
+                  <select className="ap-input" value={classId} onChange={(e)=>setClassId(e.target.value)} disabled={!kgId}>
+                    <option value="">{kgId ? (branchId ? "— اختر —" : "صفوف الروضة") : "اختر الروضة أولًا"}</option>
+                    {classList.map(c=><option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* السائق (اختياري) */}
+              <div className="ap-field">
+                <label>السائق (اختياري)</label>
+                <select className="ap-input" value={driverId} onChange={(e)=>setDriverId(e.target.value)} disabled={!kgId}>
+                  <option value="">بدون سائق</option>
+                  {driverList.map(d=>{
+                    const nm = [d.firstName,d.lastName].filter(Boolean).join(" ").trim() || "سائق";
+                    return <option key={d.id} value={d.id}>{nm}{d.phone ? ` — ${d.phone}` : ""}</option>;
+                  })}
+                </select>
+                <div className="ap-note">سائقو الفرع أولاً، وإن لم يوجد فستظهر قائمة سائقين الروضة.</div>
+              </div>
+
+              {/* الرمز — نقلناه هنا (بعد اختيار المحافظة/الروضة) */}
+              <div className="ap-field">
+                <label>رمز الطالب (يتولَّد تلقائيًا)</label>
+                <input
+                  className="ap-input"
+                  dir="ltr"
+                  placeholder="سيتولّد بعد اختيار المحافظة والروضة"
+                  value={code}
+                  readOnly
+                  title="غير قابل للتعديل — يُنشأ تلقائيًا عند الحفظ حسب المحافظة والروضة"
+                />
+                <div className="ap-note">الصيغة: رمز المحافظة - رمز الروضة - رقم متسلسل (مثال: DAM-ZHR-0001)</div>
+              </div>
+
+              {/* الصورة */}
+              <div className="ap-field">
+                <label>الصورة</label>
+                <div style={{display:"flex", gap:12, alignItems:"center"}}>
+                  <label className="ap-upload" style={{whiteSpace:"nowrap"}}>
+                    اختيار صورة
+                    <input type="file" accept="image/*" onChange={(e)=>onPickPhoto(e.target.files?.[0])}/>
+                  </label>
+                  {photoPreview ? (
+                    <img src={photoPreview} alt="" style={{width:80, height:80, objectFit:"cover", borderRadius:8, border:"1px solid #2b3a4c"}} />
+                  ) : (
+                    <div style={{width:80, height:80, display:"grid", placeItems:"center", borderRadius:8, border:"1px dashed #2b3a4c", color:"#94a3b8"}}>👦</div>
+                  )}
+                </div>
+              </div>
+
+              {/* الأبوين + ربط الحسابات */}
+              <div className="ap-field">
+                <label>معلومات وليّي الأمر (داخل وثيقة الطالب)</label>
+                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
+                  <div style={styles.parentCard}>
+                    <div style={styles.parentHead}>
+                      <b>الأب</b>
+                      <button type="button" className="ap-btn ap-btn--soft" onClick={()=>{
+                        setParentDraft({...father}); setParentModal("father");
+                      }}>إضافة/تعديل</button>
+                    </div>
+                    <ParentSummary p={father} />
+                  </div>
+                  <div style={styles.parentCard}>
+                    <div style={styles.parentHead}>
+                      <b>الأم</b>
+                      <button type="button" className="ap-btn ap-btn--soft" onClick={()=>{
+                        setParentDraft({...mother}); setParentModal("mother");
+                      }}>إضافة/تعديل</button>
+                    </div>
+                    <ParentSummary p={mother} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="ap-field">
+                <label>ربط بحساب/حسابات أولياء الأمور</label>
+                <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                  <button
+                    type="button"
+                    className="ap-btn ap-btn--soft"
+                    onClick={()=>setPickerOpen(true)}
+                  >
+                    اختيار مسؤول الحساب
+                  </button>
+
+                  {selectedGuardianIds.length > 0 ? (
+                    <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+                      {selectedGuardianIds.map((gid) => {
+                        const g = guardians.find(x=>x.id===gid);
+                        if (!g) return null;
+                        const isPrimary = gid === primaryGuardianId;
+                        return (
+                          <div
+                            key={gid}
+                            style={{
+                              display:"inline-flex",
+                              alignItems:"center",
+                              gap:8,
+                              background:"rgba(34,197,94,.12)",
+                              border:"1px solid rgba(34,197,94,.4)",
+                              color:"#a7f3d0",
+                              padding:"6px 10px",
+                              borderRadius:999
+                            }}
+                            title={isPrimary ? "الحساب الرئيسي" : "اضغط لجعله رئيسيًا"}
+                          >
+                            <span
+                              onClick={()=>setPrimaryGuardianId(gid)}
+                              style={{
+                                width:8, height:8, background:"#22c55e", borderRadius:999,
+                                boxShadow: isPrimary ? "0 0 0 3px rgba(34,197,94,.35)" : "none",
+                                cursor:"pointer"
+                              }}
+                            />
+                            <span>{g.fullName}</span>
+                            {g.phone && <span style={{opacity:.7}}>— {g.phone}</span>}
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              onClick={()=>{
+                                const rest = selectedGuardianIds.filter(x=>x!==gid);
+                                setSelectedGuardianIds(rest);
+                                if (gid === primaryGuardianId) setPrimaryGuardianId(rest[0] || "");
+                              }}
+                              title="إزالة"
+                              style={{marginInlineStart:4}}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="ap-note">لم يتم اختيار أي حساب بعد.</div>
+                  )}
+                </div>
+                <div className="ap-note" style={{ marginTop: 8 }}>
+                  تلميح: الحساب المُشار إليه كنقطة خضراء هو <b>وليّ الأمر المسؤول</b> الذي سيطّلع على بيانات الطالب لاحقًا في التطبيق.
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ——— تبويب الصحة ——— */}
+          {tab === "health" && (
+            <>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>الطول (سم)</label>
+                  <input className="ap-input" dir="ltr" value={health.heightCm}
+                    onChange={(e)=>setHealth(h=>({...h, heightCm: normalizeDigits(e.target.value)}))}
+                    placeholder="Height"/>
+                </div>
+                <div className="ap-field">
+                  <label>الوزن (كغ)</label>
+                  <input className="ap-input" dir="ltr" value={health.weightKg}
+                    onChange={(e)=>setHealth(h=>({...h, weightKg: normalizeDigits(e.target.value)}))}
+                    placeholder="Weight"/>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>فصيلة الدم</label>
+                  <input className="ap-input" value={health.bloodGroup}
+                    onChange={(e)=>setHealth(h=>({...h, bloodGroup: e.target.value}))} placeholder="A+ / O- …"/>
+                </div>
+                <div className="ap-field">
+                  <label>حساسية</label>
+                  <input className="ap-input" value={health.allergy}
+                    onChange={(e)=>setHealth(h=>({...h, allergy: e.target.value}))} placeholder="Allergy"/>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>أمراض مزمنة</label>
+                  <input className="ap-input" value={health.chronic}
+                    onChange={(e)=>setHealth(h=>({...h, chronic: e.target.value}))} placeholder="Chronic conditions"/>
+                </div>
+                <div className="ap-field">
+                  <label>أدوية دائمة</label>
+                  <input className="ap-input" value={health.medications}
+                    onChange={(e)=>setHealth(h=>({...h, medications: e.target.value}))} placeholder="Medications"/>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div className="ap-field">
+                  <label>مشاكل السمع</label>
+                  <input className="ap-input" value={health.hearingIssues}
+                    onChange={(e)=>setHealth(h=>({...h, hearingIssues: e.target.value}))} placeholder="ضعف سمع، سماعة، التهابات…"/>
+                </div>
+                <div className="ap-field">
+                  <label>البصر</label>
+                  <input className="ap-input" value={health.vision}
+                    onChange={(e)=>setHealth(h=>({...h, vision: e.target.value}))} placeholder="نظارات/ملاحظات"/>
+                </div>
+              </div>
+
+              <div className="ap-field">
+                <label>مشاكل/أمراض أخرى</label>
+                <textarea className="ap-input" rows={3} value={health.otherIssues}
+                  onChange={(e)=>setHealth(h=>({...h, otherIssues: e.target.value}))}
+                  placeholder="اكتب كل مشكلة في سطر منفصل…"/>
+              </div>
+
+              <div className="ap-field">
+                <label>ملاحظات غذائية</label>
+                <textarea className="ap-input" rows={3} value={health.dietNotes}
+                  onChange={(e)=>setHealth(h=>({...h, dietNotes: e.target.value}))}
+                  placeholder="حساسية طعام، قيود غذائية…"/>
+              </div>
+            </>
+          )}
+
+          {/* أزرار أسفل النموذج */}
+          <div className="ap-actions" style={{ marginTop: 10 }}>
+            <button type="button" className="ap-btn" onClick={resetForm}>تفريغ</button>
+
+            <div style={{ marginInlineStart: "auto", display: "flex", gap: 8 }}>
+              {tab === "health" && (
+                <button type="button" className="ap-btn" onClick={() => setTab("profile")}>
+                  السابق: المعلومات الأساسية
+                </button>
+              )}
+              {tab === "profile" && (
+                <button type="button" className="ap-btn" onClick={() => setTab("health")}>
+                  التالي: معلومات الصحة
+                </button>
+              )}
+
+              <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>
+                {loading ? "جاري الحفظ…" : "إضافة الطالب"}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
       {/* مودال الأب/الأم */}
       {parentModal && (
         <div style={styles.backdrop} onClick={()=>setParentModal(null)}>
@@ -513,364 +1106,6 @@ export default function AddStudent() {
           </div>
         </div>
       )}
-
-      {/* رأس */}
-      <div className="ap-hero">
-        <h1 className="ap-hero__title">إضافة طالب</h1>
-        <p className="ap-hero__sub">سجّل بيانات الطالب واربطه بالروضة/الفرع والصف والسائق ووليّ الأمر.</p>
-      </div>
-
-      {/* تبويبات */}
-      <div className="ap-card" style={{marginBottom:10}}>
-        <div className="ap-card__head">
-          <div className="ap-tabs">
-            <button
-              type="button"
-              className={`ap-btn ${tab === "profile" ? "ap-btn--primary" : ""}`}
-              onClick={() => setTab("profile")}
-              style={{marginInlineEnd: 8}}
-            >
-              المعلومات الأساسية
-            </button>
-            <button
-              type="button"
-              className={`ap-btn ${tab === "health" ? "ap-btn--primary" : ""}`}
-              onClick={() => setTab("health")}
-            >
-              معلومات الصحة
-            </button>
-          </div>
-          <div className="ap-note">ستُحفَظ كل البيانات ضمن مجموعة <b>students</b>.</div>
-        </div>
-      </div>
-
-      {/* بطاقة المحتوى */}
-      <section className="ap-card">
-        <div className="ap-card__body">
-          {formError && <div className="ap-error" style={{marginBottom:8}}>⚠️ {formError}</div>}
-          {success   && <div className="ap-success" style={{marginBottom:8}}>{success}</div>}
-
-          {tab === "profile" ? (
-            <form className="ap-form" onSubmit={submit}>
-              {/* صف أول */}
-              <div className="ap-field">
-                <label><span className="ap-required">*</span> رمز الطالب</label>
-                <input
-                  ref={refCode}
-                  className={`ap-input ${errors.code ? "ap-invalid":""}`}
-                  dir="ltr"
-                  placeholder="HM001"
-                  value={code}
-                  onChange={(e)=>setCode(normalizeDigits(e.target.value))}
-                />
-                {errors.code && <div className="ap-error">{errors.code}</div>}
-              </div>
-              <div className="ap-field">
-                <label><span className="ap-required">*</span> الاسم</label>
-                <input
-                  ref={refFirst}
-                  className={`ap-input ${errors.firstName ? "ap-invalid":""}`}
-                  dir="auto"
-                  value={firstName}
-                  onChange={(e)=>setFirstName(e.target.value)}
-                  placeholder="الاسم"
-                />
-                {errors.firstName && <div className="ap-error">{errors.firstName}</div>}
-              </div>
-              <div className="ap-field">
-                <label><span className="ap-required">*</span> الكنية</label>
-                <input
-                  ref={refLast}
-                  className={`ap-input ${errors.lastName ? "ap-invalid":""}`}
-                  dir="auto"
-                  value={lastName}
-                  onChange={(e)=>setLastName(e.target.value)}
-                  placeholder="الكنية"
-                />
-                {errors.lastName && <div className="ap-error">{errors.lastName}</div>}
-              </div>
-
-              {/* الميلاد + الجنس */}
-              <div className="ap-field">
-                <label>تاريخ الميلاد</label>
-                <input className="ap-input" type="date" value={dob} onChange={(e)=>setDob(e.target.value)}/>
-              </div>
-              <div className="ap-field">
-                <label>الجنس</label>
-                <div className="ap-radio">
-                  <label><input type="radio" checked={gender==="female"} onChange={()=>setGender("female")} /> أنثى</label>
-                  <label><input type="radio" checked={gender==="male"} onChange={()=>setGender("male")} /> ذكر</label>
-                </div>
-              </div>
-              <div className="ap-field">
-                <label>الحالة</label>
-                <select className="ap-input" value={status} onChange={(e)=>setStatus(e.target.value)}>
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                </select>
-              </div>
-
-              {/* العنوان */}
-              <div className="ap-field ap-span-3">
-                <label>العنوان</label>
-                <input className="ap-input" dir="auto" placeholder="المدينة، الشارع…" value={address}
-                  onChange={(e)=>setAddress(e.target.value)}/>
-              </div>
-
-              {/* المحافظة → الروضة → الفرع → الصف */}
-              <div className="ap-field">
-                <label>المحافظة</label>
-                <select className="ap-input" value={province}
-                        onChange={(e)=>{ setProvince(e.target.value); setKgId(""); setBranchId(""); setClassId(""); }}>
-                  <option value="">— اختر —</option>
-                  {PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div className="ap-field">
-                <label>الروضة</label>
-                <select className="ap-input" value={kgId} onChange={(e)=>setKgId(e.target.value)}
-                        disabled={province ? kgFiltered.length===0 : kgList.length===0}>
-                  <option value="">{province ? "— اختر —" : "اختر المحافظة أولًا"}</option>
-                  {(province ? kgFiltered : kgList).map(k=><option key={k.id} value={k.id}>{k.name || k.id}</option>)}
-                </select>
-              </div>
-              <div className="ap-field">
-                <label>الفرع</label>
-                <select className="ap-input" value={branchId} onChange={(e)=>setBranchId(e.target.value)} disabled={!kgId}>
-                  <option value="">{kgId ? "— بدون فرع / اختر —" : "اختر الروضة أولًا"}</option>
-                  {branchList.map(b=><option key={b.id} value={b.id}>{b.name || b.id}</option>)}
-                </select>
-              </div>
-              <div className="ap-field">
-                <label>الصف</label>
-                <select className="ap-input" value={classId} onChange={(e)=>setClassId(e.target.value)} disabled={!kgId}>
-                  <option value="">{kgId ? (branchId ? "— اختر —" : "صفوف الروضة") : "اختر الروضة أولًا"}</option>
-                  {classList.map(c=><option key={c.id} value={c.id}>{c.name || c.id}</option>)}
-                </select>
-              </div>
-
-              {/* السائق (اختياري) */}
-              <div className="ap-field">
-                <label>السائق (اختياري)</label>
-                <select className="ap-input" value={driverId} onChange={(e)=>setDriverId(e.target.value)} disabled={!kgId}>
-                  <option value="">بدون سائق</option>
-                  {driverList.map(d=>{
-                    const nm = [d.firstName,d.lastName].filter(Boolean).join(" ").trim() || "سائق";
-                    return <option key={d.id} value={d.id}>{nm}{d.phone ? ` — ${d.phone}` : ""}</option>;
-                  })}
-                </select>
-                <div className="ap-note">تُعرض السائقون المرتبطون بالروضة المختارة.</div>
-              </div>
-
-              {/* الصورة */}
-              <div className="ap-field">
-                <label>الصورة</label>
-                <div style={{display:"flex", gap:12, alignItems:"center"}}>
-                  <label className="ap-upload" style={{whiteSpace:"nowrap"}}>
-                    اختيار صورة
-                    <input type="file" accept="image/*" onChange={(e)=>onPickPhoto(e.target.files?.[0])}/>
-                  </label>
-                  {photoPreview ? (
-                    <img src={photoPreview} alt="" style={{width:80, height:80, objectFit:"cover", borderRadius:8, border:"1px solid #2b3a4c"}} />
-                  ) : (
-                    <div style={{width:80, height:80, display:"grid", placeItems:"center", borderRadius:8, border:"1px dashed #2b3a4c", color:"#94a3b8"}}>👦</div>
-                  )}
-                </div>
-              </div>
-
-              {/* معلومات الأب/الأم + ملخص */}
-              <div className="ap-field ap-span-3">
-                <label>معلومات وليّي الأمر (داخل وثيقة الطالب)</label>
-                <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
-                  <div style={styles.parentCard}>
-                    <div style={styles.parentHead}>
-                      <b>الأب</b>
-                      <button type="button" className="ap-btn ap-btn--soft" onClick={()=>{
-                        setParentDraft({...father}); setParentModal("father");
-                      }}>إضافة/تعديل</button>
-                    </div>
-                    <ParentSummary p={father} />
-                  </div>
-                  <div style={styles.parentCard}>
-                    <div style={styles.parentHead}>
-                      <b>الأم</b>
-                      <button type="button" className="ap-btn ap-btn--soft" onClick={()=>{
-                        setParentDraft({...mother}); setParentModal("mother");
-                      }}>إضافة/تعديل</button>
-                    </div>
-                    <ParentSummary p={mother} />
-                  </div>
-                </div>
-              </div>
-
-              {/* ربط بحساب/حسابات أولياء الأمور */}
-              <div className="ap-field ap-span-3">
-                <label>ربط بحساب/حسابات أولياء الأمور</label>
-
-                {/* زر فتح المنتقي */}
-                <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
-                  <button
-                    type="button"
-                    className="ap-btn ap-btn--soft"
-                    onClick={()=>setPickerOpen(true)}
-                    title="اختيار حسابات أولياء الأمور"
-                  >
-                    اختيار مسؤول الحساب
-                  </button>
-
-                  {/* عرض الشارات المختارة */}
-                  {selectedGuardianIds.length > 0 ? (
-                    <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
-                      {selectedGuardianIds.map((gid) => {
-                        const g = guardians.find(x=>x.id===gid);
-                        if (!g) return null;
-                        const isPrimary = gid === primaryGuardianId;
-                        return (
-                          <div
-                            key={gid}
-                            style={{
-                              display:"inline-flex",
-                              alignItems:"center",
-                              gap:8,
-                              background:"rgba(34,197,94,.12)",
-                              border:"1px solid rgba(34,197,94,.4)",
-                              color:"#a7f3d0",
-                              padding:"6px 10px",
-                              borderRadius:999
-                            }}
-                            title={isPrimary ? "الحساب الرئيسي" : "اضغط لجعله رئيسيًا"}
-                          >
-                            <span
-                              onClick={()=>setPrimaryGuardianId(gid)}
-                              style={{
-                                width:8, height:8, background:"#22c55e", borderRadius:999,
-                                boxShadow: isPrimary ? "0 0 0 3px rgba(34,197,94,.35)" : "none",
-                                cursor:"pointer"
-                              }}
-                            />
-                            <span>{g.fullName}</span>
-                            {g.phone && <span style={{opacity:.7}}>— {g.phone}</span>}
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={()=>{
-                                const rest = selectedGuardianIds.filter(x=>x!==gid);
-                                setSelectedGuardianIds(rest);
-                                if (gid === primaryGuardianId) setPrimaryGuardianId(rest[0] || "");
-                              }}
-                              title="إزالة"
-                              style={{marginInlineStart:4}}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="ap-note">لم يتم اختيار أي حساب بعد.</div>
-                  )}
-                </div>
-
-                <div className="ap-note" style={{ marginTop: 8 }}>
-                  تلميح: يمكنك تعيين “الرئيسي” من القائمة أو بالنقر على النقطة داخل الشارة.
-                </div>
-              </div>
-
-              {/* أزرار */}
-              <div className="ap-actions ap-span-3">
-                <button type="button" className="ap-btn" onClick={resetForm}>تفريغ</button>
-                <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>
-                  {loading ? "جاري الحفظ…" : "إضافة الطالب"}
-                </button>
-              </div>
-            </form>
-          ) : (
-            // ——— تبويب الصحة ———
-            <form className="ap-form" onSubmit={submit}>
-              <div className="ap-field">
-                <label>الطول (سم)</label>
-                <input className="ap-input" dir="ltr" value={health.heightCm}
-                  onChange={(e)=>setHealth(h=>({...h, heightCm: normalizeDigits(e.target.value)}))}
-                  placeholder="Height"/>
-              </div>
-              <div className="ap-field">
-                <label>الوزن (كغ)</label>
-                <input className="ap-input" dir="ltr" value={health.weightKg}
-                  onChange={(e)=>setHealth(h=>({...h, weightKg: normalizeDigits(e.target.value)}))}
-                  placeholder="Weight"/>
-              </div>
-
-              <div className="ap-field">
-                <label>فصيلة الدم</label>
-                <input className="ap-input" value={health.bloodGroup}
-                  onChange={(e)=>setHealth(h=>({...h, bloodGroup: e.target.value}))} placeholder="Unknown / A+ / O- …"/>
-              </div>
-              <div className="ap-field">
-                <label>حساسية</label>
-                <input className="ap-input" value={health.allergy}
-                  onChange={(e)=>setHealth(h=>({...h, allergy: e.target.value}))} placeholder="Allergy"/>
-              </div>
-
-              <div className="ap-field">
-                <label>أمراض مزمنة</label>
-                <input className="ap-input" value={health.chronic}
-                  onChange={(e)=>setHealth(h=>({...h, chronic: e.target.value}))} placeholder="Chronic conditions"/>
-              </div>
-              <div className="ap-field">
-                <label>أدوية دائمة</label>
-                <input className="ap-input" value={health.medications}
-                  onChange={(e)=>setHealth(h=>({...h, medications: e.target.value}))} placeholder="Medications"/>
-              </div>
-
-              <div className="ap-field">
-                <label>مطعّم حتى الآن؟</label>
-                <label className="ap-line">
-                  <input type="checkbox" checked={health.vaccinationsUpToDate}
-                    onChange={(e)=>setHealth(h=>({...h, vaccinationsUpToDate: e.target.checked}))}/>
-                  <span style={{marginInlineStart:8}}>نعم</span>
-                </label>
-              </div>
-              <div className="ap-field">
-                <label>تاريخ آخر فحص</label>
-                <input className="ap-input" type="date" value={health.lastCheckup}
-                  onChange={(e)=>setHealth(h=>({...h, lastCheckup: e.target.value}))}/>
-              </div>
-
-              <div className="ap-field">
-                <label>طبيب العائلة</label>
-                <input className="ap-input" value={health.doctorName}
-                  onChange={(e)=>setHealth(h=>({...h, doctorName: e.target.value}))} placeholder="Doctor name"/>
-              </div>
-              <div className="ap-field">
-                <label>هاتف الطبيب</label>
-                <input className="ap-input" dir="ltr" value={health.doctorPhone}
-                  onChange={(e)=>setHealth(h=>({...h, doctorPhone: normalizeDigits(e.target.value)}))}
-                  placeholder="Doctor phone"/>
-              </div>
-
-              <div className="ap-field">
-                <label>البصر</label>
-                <input className="ap-input" value={health.vision}
-                  onChange={(e)=>setHealth(h=>({...h, vision: e.target.value}))} placeholder="Vision notes"/>
-              </div>
-              <div className="ap-field ap-span-2">
-                <label>ملاحظات غذائية</label>
-                <textarea className="ap-input" rows={3} value={health.dietNotes}
-                  onChange={(e)=>setHealth(h=>({...h, dietNotes: e.target.value}))}
-                  placeholder="حساسية طعام، قيود غذائية…"/>
-              </div>
-
-              <div className="ap-actions ap-span-2">
-                <button type="button" className="ap-btn" onClick={()=>setTab("profile")}>الرجوع للمعلومات الأساسية</button>
-                <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>
-                  {loading ? "جاري الحفظ…" : "إضافة الطالب"}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      </section>
     </div>
   );
 }

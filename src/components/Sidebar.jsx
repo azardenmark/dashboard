@@ -186,7 +186,7 @@ export default function Sidebar() {
             {/* الروضات والفروع — accent فقط عندما تكون داخلها */}
             <Item
               to="/kindergartens"
-              label="الروضات والفروع"
+              label="أضافة روضة"
               open={open}
               accent={isInKindergartens}
               badge={counts.kindergartens}
