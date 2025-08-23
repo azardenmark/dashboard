@@ -1,5 +1,5 @@
 // src/pages/AddDriver.jsx
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./FormStyles.css";
 
 import {
@@ -8,14 +8,51 @@ import {
   createUserOnSecondary,
   signOutSecondary,
   deleteSecondaryUser,
-  assignPublicIdAndIndex, // ✅ توليد/حجز publicId + فهرسة
 } from "../firebase";
 
 import { saveToFirestore } from "../firebase";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { doc, deleteDoc } from "firebase/firestore";
+import {
+  ref, uploadBytes, getDownloadURL, deleteObject
+} from "firebase/storage";
+import {
+  doc, deleteDoc, collection, getDocs, getDoc, setDoc, serverTimestamp, query, orderBy
+} from "firebase/firestore";
 
-// يحوّل الأرقام العربية/الفارسية إلى لاتينية
+
+// Provinces defaults (id = code)
+const DEFAULT_PROVINCES = [
+  { id:"DAM", name:"دمشق",      code:"DAM" },
+  { id:"RDI", name:"ريف دمشق",  code:"RDI" },
+  { id:"ALE", name:"حلب",       code:"ALE" },
+  { id:"HMS", name:"حمص",       code:"HMS" },
+  { id:"HMA", name:"حماة",      code:"HMA" },
+  { id:"LAZ", name:"اللاذقية",  code:"LAZ" },
+  { id:"TAR", name:"طرطوس",     code:"TAR" },
+  { id:"IDL", name:"إدلب",      code:"IDL" },
+  { id:"DEZ", name:"دير الزور", code:"DEZ" },
+  { id:"RAQ", name:"الرقة",     code:"RAQ" },
+  { id:"HAS", name:"الحسكة",    code:"HAS" },
+  { id:"DRA", name:"درعا",      code:"DRA" },
+  { id:"SWA", name:"السويداء",  code:"SWA" },
+  { id:"QUN", name:"القنيطرة",  code:"QUN" },
+];
+
+// يكتب المحافظات الافتراضية مرة واحدة لو كانت المجموعة فارغة
+async function seedDefaultProvinces() {
+  const { writeBatch, doc, collection, getDocs, query, limit } = await import("firebase/firestore");
+  const batch = writeBatch(db);
+  const q = query(collection(db, "provinces"), limit(1));
+  const snap = await getDocs(q);
+  if (!snap.empty) return; // موجودة مسبقاً
+
+  DEFAULT_PROVINCES.forEach(p => {
+    batch.set(doc(db, "provinces", p.id), { name: p.name, code: p.code, createdAt: serverTimestamp() }, { merge: true });
+  });
+  await batch.commit();
+}
+
+
+/* ========= Utils ========= */
 function normalizeDigits(str = "") {
   const map = {
     "٠":"0","١":"1","٢":"2","٣":"3","٤":"4",
@@ -25,7 +62,6 @@ function normalizeDigits(str = "") {
   };
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
-
 function prettyFirebaseError(err) {
   if (!err?.code) return err?.message || "حدث خطأ غير معروف.";
   switch (err.code) {
@@ -37,8 +73,33 @@ function prettyFirebaseError(err) {
   }
 }
 
+/* ========= توليد كود دخول مع بادئة المحافظة + فهرسته ========= */
+function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
+function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
+
+async function createPrefixedLoginCode({ uid, role, col, email, phone, displayName, provinceCode }) {
+  if (!provinceCode) throw new Error("لم يتم تحديد كود المحافظة.");
+
+  for (let i = 0; i < 40; i++) {
+    const cand = `${provinceCode}-${randomLetters4()}${randomDigits4()}`; // مثال: DAM-ABCD1234
+    const idxSnap = await getDoc(doc(db, "logins", cand));
+    if (!idxSnap.exists()) {
+      // سجّل الكود في فهرس logins
+      await setDoc(
+        doc(db, "logins", cand),
+        { uid, role, col, email: email || null, phone: phone || null, displayName: displayName || "", createdAt: serverTimestamp() },
+        { merge: true }
+      );
+      // واكتبه أيضاً على وثيقة المستخدم كـ publicId
+      await setDoc(doc(db, col, uid), { publicId: cand, updatedAt: serverTimestamp() }, { merge: true });
+      return cand;
+    }
+  }
+  throw new Error("تعذّر توليد كود دخول فريد. أعد المحاولة.");
+}
+
 export default function AddDriver() {
-  // الحقول
+  // الحقول الأساسية
   const [firstName, setFirstName] = useState("");
   const [lastName,  setLastName]  = useState("");
   const [email,     setEmail]     = useState("");
@@ -48,7 +109,15 @@ export default function AddDriver() {
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
-  // رخص القيادة: ملفات متعددة
+  // المحافظة
+  const [provinces, setProvinces] = useState([]); // [{id, name, code}]
+  const [provinceId, setProvinceId] = useState("");
+  const selProvince = useMemo(
+    () => provinces.find(p => p.id === provinceId) || null,
+    [provinces, provinceId]
+  );
+
+  // رخص القيادة
   const [files, setFiles] = useState([]);
 
   // واجهة
@@ -56,23 +125,44 @@ export default function AddDriver() {
   const [formError, setFormError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // أخطاء الحقول
   const [errors, setErrors] = useState({
-    firstName:"", lastName:"", contact:"", password:"", confirm:""
+    firstName:"", lastName:"", contact:"", password:"", confirm:"", province:""
   });
 
-  // إظهار/إخفاء كلمة المرور
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // اختيار/إزالة الملفات
-  function onPickFiles(list) {
-    if (!list?.length) return;
-    setFiles(prev => [...prev, ...Array.from(list)]);
-  }
-  function removeFileAt(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
+  /* ==== تحميل المحافظات من Firestore ==== */
+  useEffect(() => {
+  (async () => {
+    try {
+      const qy = query(collection(db, "provinces"), orderBy("name"));
+      const snap = await getDocs(qy);
+      const arr = [];
+      snap.forEach(d => {
+        const x = d.data() || {};
+        arr.push({ id: d.id, name: x.name || d.id, code: x.code || d.id });
+      });
 
-  // رفع رخص القيادة وإرجاع بياناتها (مع تتبع المسارات للحذف عند الفشل)
+      if (arr.length === 0) {
+        // جرّب تهيئتها مرة واحدة (يتطلب صلاحية الأدمن)
+        try { await seedDefaultProvinces(); } catch {}
+        // اعرض قائمة افتراضية فوراً حتى لو فشلت الكتابة
+        setProvinces(DEFAULT_PROVINCES);
+      } else {
+        setProvinces(arr);
+      }
+    } catch {
+      // عند أي خطأ قراءة، أعرض الافتراضي
+      setProvinces(DEFAULT_PROVINCES);
+    }
+  })();
+}, []);
+
+
+  /* ==== مرفقات ==== */
+  function onPickFiles(list) { if (!list?.length) return; setFiles(prev => [...prev, ...Array.from(list)]); }
+  function removeFileAt(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
   async function uploadLicenses(uid) {
     const uploaded = [];
     for (const f of files) {
@@ -91,48 +181,50 @@ export default function AddDriver() {
     return uploaded;
   }
 
-  // تفريغ
   function resetForm() {
     setFirstName(""); setLastName(""); setEmail(""); setPhone("");
     setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-    setFiles([]);
-    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"" });
+    setProvinceId(""); setFiles([]);
+    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"", province:"" });
     setFormError(""); setSuccess("");
   }
 
+  /* ==== حفظ ==== */
   async function submit(e) {
     e.preventDefault();
     if (loading) return;
     setFormError(""); setSuccess("");
 
-    // تحقّق شامل محلي قبل أي اتصال بـ Auth
     const phoneNorm = normalizeDigits(phone);
+
     const nextErrors = {
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
       lastName : lastName.trim()  ? "" : "الكنية مطلوبة",
       contact  : (email.trim() && phoneNorm.trim()) ? "" : "أدخل البريد ورقم الهاتف",
       password : password.length >= 6 ? "" : "كلمة المرور لا تقل عن 6 أحرف",
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
+      province : selProvince ? "" : "اختر المحافظة",
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
 
-    // متغيرات لآلية الاسترجاع
     let uid = null;
     let uploadedPaths = [];
 
     try {
       setLoading(true);
 
-      // 1) إنشاء مستخدم Auth (بعد اكتمال التحقق فقط)
+      // 1) إنشاء مستخدم Auth على المثيل الثانوي
       const cred = await createUserOnSecondary({ email: email.trim(), password });
       uid = cred.uid;
 
-      // 2) رفع الملفات (قد تفشل — سنحذف المستخدم والملفات عند الفشل)
+      // 2) رفع الرخص
       const licenses = await uploadLicenses(uid);
       uploadedPaths = licenses.map(x => x.path);
 
-      // 3) حفظ مستند السائق (id = uid)
+      // 3) حفظ مستند السائق (id = uid) + المحافظة
+      const provinceName = selProvince?.name || "";
+      const provinceCode = selProvince?.code || "";
       await saveToFirestore("drivers", {
         role     : "driver",
         firstName: firstName.trim(),
@@ -143,40 +235,35 @@ export default function AddDriver() {
         address  : address.trim() || null,
         licenses,
         active   : true,
+        // الحقول الجديدة
+        province     : provinceName,
+        provinceCode : provinceCode,
         createdAt: new Date().toISOString(),
       }, { id: uid });
 
-      // 4) توليد/حجز publicId + فهرسته لتسجيل الدخول
-      const publicId = await assignPublicIdAndIndex({
+      // 4) توليد كود دخول مع بادئة كود المحافظة + فهرسته وكتابته كـ publicId
+      const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
+      const fullCode = await createPrefixedLoginCode({
         uid,
         role: "driver",
         col : "drivers",
-        email: email.trim() || null,
-        phone: phoneNorm.trim() || null,
-        displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
-        index: true,
+        email: email.trim(),
+        phone: phoneNorm.trim(),
+        displayName,
+        provinceCode: provinceCode || "NA"
       });
 
-      setSuccess(`🎉 تم إنشاء حساب السائق وحفظ البيانات بنجاح. الكود: ${publicId}`);
+      setSuccess(`🎉 تم إنشاء حساب السائق. الكود: ${fullCode}`);
       resetForm();
     } catch (err) {
       console.error(err);
 
       // ===== Rollback شامل =====
-      try {
-        // حذف المستخدم الذي تم إنشاؤه على المثيل الثانوي (إن وُجد)
-        await deleteSecondaryUser();
-      } catch {/* تجاهل */}
-
-      // حذف أي ملفات تم رفعها
+      try { await deleteSecondaryUser(); } catch {/* تجاهل */}
       for (const p of uploadedPaths) {
         try { await deleteObject(ref(storage, p)); } catch {/* تجاهل */}
       }
-
-      // حذف وثيقة Firestore إن أنشئت
-      if (uid) {
-        try { await deleteDoc(doc(db, "drivers", uid)); } catch {/* تجاهل */}
-      }
+      if (uid) { try { await deleteDoc(doc(db, "drivers", uid)); } catch {/* تجاهل */} }
 
       setFormError(prettyFirebaseError(err));
     } finally {
@@ -185,6 +272,7 @@ export default function AddDriver() {
     }
   }
 
+  /* ==== واجهة ==== */
   return (
     <div className="ap-page">
       <div className="ap-hero">
@@ -269,7 +357,7 @@ export default function AddDriver() {
               </div>
             </div>
 
-            {/* العنوان (اختياري) */}
+            {/* العنوان */}
             <div className="ap-field ap-span-2">
               <label>العنوان</label>
               <input
@@ -279,6 +367,35 @@ export default function AddDriver() {
                 onChange={(e)=>setAddress(e.target.value)}
                 type="text"
                 placeholder="المدينة، الشارع، رقم المنزل…"
+              />
+            </div>
+
+            {/* المحافظة */}
+            <div className="ap-field">
+              <label><span className="ap-required">*</span> المحافظة</label>
+              <select
+                className={`ap-input ${errors.province ? "ap-invalid" : ""}`}
+                value={provinceId}
+                onChange={(e)=>setProvinceId(e.target.value)}
+              >
+                <option value="">— اختر المحافظة —</option>
+                {provinces.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {errors.province && <div className="ap-error">{errors.province}</div>}
+            </div>
+
+            {/* كود المحافظة (غير قابل للتعديل) */}
+            <div className="ap-field">
+              <label>كود المحافظة (توليدي)</label>
+              <input
+                className="ap-input"
+                value={selProvince?.code || ""}
+                readOnly
+                disabled
+                placeholder="اختر المحافظة أولاً"
+                title="يعبّأ تلقائياً حسب المحافظة"
               />
             </div>
 

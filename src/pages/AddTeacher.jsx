@@ -1,5 +1,5 @@
 // src/pages/AddTeacher.jsx
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./FormStyles.css";
 
 import {
@@ -8,12 +8,14 @@ import {
   createUserOnSecondary,
   signOutSecondary,
   deleteSecondaryUser,
-  assignPublicIdAndIndex, // ✅
+  saveToFirestore,
 } from "../firebase";
-import { saveToFirestore } from "../firebase";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { doc, deleteDoc } from "firebase/firestore";
+import {
+  doc, deleteDoc, collection, query, orderBy, getDocs, getDoc, setDoc, serverTimestamp
+} from "firebase/firestore";
 
+/* ================= Utils ================= */
 function normalizeDigits(str = "") {
   const map = {
     "٠": "0","١": "1","٢": "2","٣": "3","٤": "4",
@@ -23,7 +25,6 @@ function normalizeDigits(str = "") {
   };
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
-
 function prettyFirebaseError(err) {
   if (!err?.code) return err.message || "حدث خطأ غير معروف";
   switch (err.code) {
@@ -32,6 +33,46 @@ function prettyFirebaseError(err) {
     case "auth/invalid-email":        return "البريد الإلكتروني غير صالح.";
     default:                          return err.message || "فشل العملية.";
   }
+}
+
+/* ============== Provinces (fallback) ============== */
+const DEFAULT_PROVINCES = [
+  { id:"DAM", name:"دمشق",      code:"DAM" },
+  { id:"RDI", name:"ريف دمشق",  code:"RDI" },
+  { id:"ALE", name:"حلب",       code:"ALE" },
+  { id:"HMS", name:"حمص",       code:"HMS" },
+  { id:"HMA", name:"حماة",      code:"HMA" },
+  { id:"LAZ", name:"اللاذقية",  code:"LAZ" },
+  { id:"TAR", name:"طرطوس",     code:"TAR" },
+  { id:"IDL", name:"إدلب",      code:"IDL" },
+  { id:"DEZ", name:"دير الزور", code:"DEZ" },
+  { id:"RAQ", name:"الرقة",     code:"RAQ" },
+  { id:"HAS", name:"الحسكة",    code:"HAS" },
+  { id:"DRA", name:"درعا",      code:"DRA" },
+  { id:"SWA", name:"السويداء",  code:"SWA" },
+  { id:"QUN", name:"القنيطرة",  code:"QUN" },
+];
+
+/* ===== publicId generator with province prefix (محلي داخل الملف) ===== */
+function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
+function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
+async function assignPrefixedPublicId({ uid, role, col, prefix, email=null, phone=null, displayName="" }) {
+  if (!uid || !col || !role || !prefix) throw new Error("assignPrefixedPublicId: معطيات ناقصة.");
+  let publicId = "";
+  for (let i=0;i<50;i++){
+    const base = `${randomLetters4()}${randomDigits4()}`;
+    const candidate = `${prefix}-${base}`;
+    const idxSnap = await getDoc(doc(db,"logins",candidate));
+    if (!idxSnap.exists()) { publicId = candidate; break; }
+  }
+  if (!publicId) throw new Error("تعذر توليد publicId فريد.");
+
+  await setDoc(doc(db,col,uid), { publicId, role, updatedAt: serverTimestamp() }, { merge:true });
+  await setDoc(doc(db,"logins",publicId), {
+    uid, role, col, email: email||null, phone: phone||null, displayName: displayName||"", createdAt: serverTimestamp()
+  }, { merge:true });
+
+  return publicId;
 }
 
 export default function AddTeacher() {
@@ -44,19 +85,8 @@ export default function AddTeacher() {
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
+  // ملفات الشهادات
   const [files, setFiles] = useState([]); // File[]
-
-  const [loading, setLoading] = useState(false);
-  const [formError, setFormError] = useState("");
-  const [success, setSuccess] = useState("");
-
-  const [errors, setErrors] = useState({
-    firstName: "", lastName: "", contact: "", password: "", confirm: ""
-  });
-
-  const [showPw, setShowPw] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-
   function onPickFiles(fileList) {
     if (!fileList?.length) return;
     setFiles((prev) => [...prev, ...Array.from(fileList)]);
@@ -64,7 +94,6 @@ export default function AddTeacher() {
   function removeFileAt(index) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }
-
   async function uploadCertificates(uid) {
     const uploaded = [];
     for (const f of files) {
@@ -72,22 +101,56 @@ export default function AddTeacher() {
       const r = ref(storage, path);
       await uploadBytes(r, f);
       const url = await getDownloadURL(r);
-      uploaded.push({
-        name: f.name,
-        size: f.size,
-        contentType: f.type || "application/octet-stream",
-        url,
-        path,
-      });
+      uploaded.push({ name: f.name, size: f.size, contentType: f.type || "application/octet-stream", url, path });
     }
     return uploaded;
   }
+
+  // المحافظات
+  const [provinces, setProvinces] = useState([]);
+  const [provinceId, setProvinceId] = useState(""); // == code
+  const selectedProvince = useMemo(
+    () => provinces.find(p => p.id === provinceId) || null,
+    [provinceId, provinces]
+  );
+
+  // واجهة
+  const [loading, setLoading] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const [errors, setErrors] = useState({
+    firstName: "", lastName: "", contact: "", password: "", confirm: "", province: ""
+  });
+
+  const [showPw, setShowPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  /* تحميل المحافظات */
+  useEffect(() => {
+    (async () => {
+      try {
+        const qy = query(collection(db, "provinces"), orderBy("name"));
+        const snap = await getDocs(qy);
+        const arr = [];
+        snap.forEach(d => {
+          const x = d.data() || {};
+          const code = x.code || d.id;
+          arr.push({ id: code, name: x.name || d.id, code });
+        });
+        setProvinces(arr.length ? arr : DEFAULT_PROVINCES);
+      } catch {
+        setProvinces(DEFAULT_PROVINCES);
+      }
+    })();
+  }, []);
 
   function resetForm() {
     setFirstName(""); setLastName(""); setEmail(""); setPhone("");
     setGender("male"); setAddress(""); setPassword(""); setConfirm("");
     setFiles([]);
-    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"" });
+    setProvinceId("");
+    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"", province:"" });
     setFormError(""); setSuccess("");
   }
 
@@ -103,6 +166,7 @@ export default function AddTeacher() {
       contact  : (email.trim() && phoneNorm.trim()) ? "" : "أدخل البريد ورقم الهاتف",
       password : password.length >= 6 ? "" : "كلمة المرور لا تقل عن 6 أحرف",
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
+      province : selectedProvince ? "" : "اختر المحافظة",
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
@@ -121,7 +185,7 @@ export default function AddTeacher() {
       const certs = await uploadCertificates(uid);
       uploadedPaths = certs.map(x => x.path);
 
-      // 3) Firestore
+      // 3) Firestore: وثيقة المعلم (id = uid)
       await saveToFirestore("teachers", {
         role     : "teacher",
         firstName: firstName.trim(),
@@ -132,18 +196,20 @@ export default function AddTeacher() {
         address  : address.trim() || null,
         certificates: certs,
         active   : true,
-        createdAt: new Date().toISOString(),
+        provinceName: selectedProvince?.name || "",
+        provinceCode: selectedProvince?.code || "",
+        createdAt: serverTimestamp(),
       }, { id: uid });
 
-      // 4) publicId + index
-      const publicId = await assignPublicIdAndIndex({
+      // 4) publicId مع بادئة كود المحافظة + فهرسة
+      const publicId = await assignPrefixedPublicId({
         uid,
         role: "teacher",
         col : "teachers",
+        prefix: selectedProvince.code,
         email: email.trim() || null,
         phone: phoneNorm.trim() || null,
         displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
-        index: true,
       });
 
       setSuccess(`✅ تم إنشاء حساب المعلّم بنجاح. الكود: ${publicId}`);
@@ -262,6 +328,33 @@ export default function AddTeacher() {
               />
             </div>
 
+            {/* المحافظة + كود المحافظة */}
+            <div className="ap-field">
+              <label><span className="ap-required">*</span> المحافظة</label>
+              <select
+                className={`ap-input ${errors.province ? "ap-invalid" : ""}`}
+                value={provinceId}
+                onChange={(e)=>setProvinceId(e.target.value)}
+              >
+                <option value="">— اختر المحافظة —</option>
+                {provinces.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {errors.province && <div className="ap-error">{errors.province}</div>}
+            </div>
+
+            <div className="ap-field">
+              <label>كود المحافظة (توليدي)</label>
+              <input
+                className="ap-input"
+                value={selectedProvince?.code || ""}
+                readOnly
+                placeholder="اختر المحافظة أولًا"
+                title="غير قابل للتعديل — يُستخدم كبادئة للكود العام"
+              />
+            </div>
+
             {/* كلمة المرور */}
             <div className="ap-field">
               <label><span className="ap-required">*</span> كلمة المرور</label>
@@ -350,7 +443,7 @@ export default function AddTeacher() {
 
             {/* الأزرار */}
             <div className="ap-actions ap-span-2">
-              <span className="ap-note">سيتم إنشاء الحساب كـ <b>معلّم</b>.</span>
+              <span className="ap-note">سيتم إنشاء الحساب كـ <b>معلّم</b>. الكود العام سيبدأ بكود المحافظة.</span>
               <button type="button" className="ap-btn" onClick={resetForm}>
                 تفريغ
               </button>

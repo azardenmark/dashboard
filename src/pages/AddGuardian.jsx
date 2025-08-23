@@ -1,16 +1,26 @@
 // src/pages/AddGuardian.jsx
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   db,
   createUserOnSecondary,
   deleteSecondaryUser,
   signOutSecondary,
-  assignPublicIdAndIndex, // ✅
+  saveToFirestore,
 } from "../firebase";
-import { saveToFirestore } from "../firebase";
 import "./FormStyles.css";
-import { doc, deleteDoc } from "firebase/firestore";
 
+import {
+  collection,
+  query,
+  orderBy,
+  getDocs,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+
+/* ================= Utils ================= */
 function normalizeDigits(str = "") {
   const map = {
     "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
@@ -20,7 +30,6 @@ function normalizeDigits(str = "") {
   };
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
-
 function prettyFirebaseError(err) {
   if (!err?.code) return err?.message || "حدث خطأ غير معروف";
   switch (err.code) {
@@ -31,7 +40,67 @@ function prettyFirebaseError(err) {
   }
 }
 
+/* ============== Provinces (fallback) ============== */
+const DEFAULT_PROVINCES = [
+  { id:"DAM", name:"دمشق",      code:"DAM" },
+  { id:"RDI", name:"ريف دمشق",  code:"RDI" },
+  { id:"ALE", name:"حلب",       code:"ALE" },
+  { id:"HMS", name:"حمص",       code:"HMS" },
+  { id:"HMA", name:"حماة",      code:"HMA" },
+  { id:"LAZ", name:"اللاذقية",  code:"LAZ" },
+  { id:"TAR", name:"طرطوس",     code:"TAR" },
+  { id:"IDL", name:"إدلب",      code:"IDL" },
+  { id:"DEZ", name:"دير الزور", code:"DEZ" },
+  { id:"RAQ", name:"الرقة",     code:"RAQ" },
+  { id:"HAS", name:"الحسكة",    code:"HAS" },
+  { id:"DRA", name:"درعا",      code:"DRA" },
+  { id:"SWA", name:"السويداء",  code:"SWA" },
+  { id:"QUN", name:"القنيطرة",  code:"QUN" },
+];
+
+/* publicId generator with province prefix */
+function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
+function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
+
+/** يولّد publicId مع بادئة كود المحافظة ويكتب فهرس الدخول logins/{publicId} */
+async function assignPrefixedPublicId({
+  uid, role, col, prefix, email=null, phone=null, displayName=""
+}) {
+  if (!uid || !col || !role || !prefix) throw new Error("assignPrefixedPublicId: معطيات ناقصة.");
+
+  let publicId = "";
+  for (let i=0; i<50; i++) {
+    const base = `${randomLetters4()}${randomDigits4()}`;
+    const candidate = `${prefix}-${base}`;
+    const idxSnap = await getDoc(doc(db, "logins", candidate));
+    if (!idxSnap.exists()) { publicId = candidate; break; }
+  }
+  if (!publicId) throw new Error("تعذر توليد publicId فريد.");
+
+  await setDoc(
+    doc(db, col, uid),
+    { publicId, role, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+
+  await setDoc(
+    doc(db, "logins", publicId),
+    {
+      uid, role, col,
+      email: email || null,
+      phone: phone || null,
+      displayName: displayName || "",
+      createdAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return publicId;
+}
+
+/* ================= Component ================= */
 export default function AddGuardian() {
+  // الأساسيات
   const [firstName, setFirstName] = useState("");
   const [lastName,  setLastName]  = useState("");
   const [email,     setEmail]     = useState("");
@@ -41,19 +110,50 @@ export default function AddGuardian() {
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
-  const [children, setChildren] = useState([{ id: 1, name: "", img: "" }]);
+  // الأبناء
+  const [children, setChildren]   = useState([{ id: 1, name: "", img: "" }]);
 
+  // المحافظة
+  const [provinces, setProvinces] = useState([]);
+  const [provinceId, setProvinceId] = useState("");     // = code/id
+  const selectedProvince = useMemo(
+    () => provinces.find(p => p.id === provinceId) || null,
+    [provinceId, provinces]
+  );
+
+  // واجهة
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [success, setSuccess] = useState("");
 
   const [errors, setErrors] = useState({
-    firstName: "", lastName: "", contact: "", password: "", confirm: ""
+    firstName: "", lastName: "", contact: "", password: "", confirm: "", province: ""
   });
 
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  /* -------- تحميل المحافظات -------- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const qy = query(collection(db, "provinces"), orderBy("name"));
+        const snap = await getDocs(qy);
+        const arr = [];
+        snap.forEach(d => {
+          const x = d.data() || {};
+          // اجعل id يساوي code إن وُجد ليكون ثابتًا
+          const code = x.code || d.id;
+          arr.push({ id: code, name: x.name || d.id, code });
+        });
+        setProvinces(arr.length ? arr : DEFAULT_PROVINCES);
+      } catch {
+        setProvinces(DEFAULT_PROVINCES);
+      }
+    })();
+  }, []);
+
+  /* -------- أبناء ولي الأمر (صورة محلية فقط كما كانت) -------- */
   function onUploadChild(index, file) {
     if (!file) return;
     const reader = new FileReader();
@@ -66,7 +166,6 @@ export default function AddGuardian() {
     };
     reader.readAsDataURL(file);
   }
-
   function addChild() {
     setChildren(prev => [...prev, { id: Date.now(), name: "", img: "" }]);
   }
@@ -74,35 +173,44 @@ export default function AddGuardian() {
     setChildren(prev => prev.filter(c => c.id !== id));
   }
 
+  /* -------- تفريغ -------- */
+  function resetForm() {
+    setFirstName(""); setLastName(""); setEmail(""); setPhone("");
+    setGender("male"); setAddress(""); setPassword(""); setConfirm("");
+    setChildren([{ id: 1, name: "", img: "" }]);
+    setProvinceId("");
+    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"", province:"" });
+    setFormError(""); setSuccess("");
+  }
+
+  /* -------- إرسال -------- */
   async function submit(e) {
     e.preventDefault();
     setFormError(""); setSuccess("");
 
     const phoneNorm = normalizeDigits(phone);
 
-    // تحقّق شامل قبل ملامسة Auth
     const nextErrors = {
       firstName: firstName.trim() ? "" : "الاسم مطلوب",
       lastName : lastName.trim()  ? "" : "الكنية مطلوبة",
       contact  : (email.trim() || phoneNorm.trim()) ? "" : "أدخل البريد أو رقم الهاتف",
       password : password.length >= 6 ? "" : "كلمة المرور لا تقل عن 6 أحرف",
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
+      province : selectedProvince ? "" : "اختر المحافظة",
     };
     setErrors(nextErrors);
-    const hasError = Object.values(nextErrors).some(Boolean);
-    if (hasError) return;
+    if (Object.values(nextErrors).some(Boolean)) return;
 
-    // متغيرات للـ rollback
     let uid = null;
 
     try {
       setLoading(true);
 
-      // 1) Auth (بعد اكتمال التحقق فقط)
-      const userCred = await createUserOnSecondary({ email: email.trim(), password });
-      uid = userCred.uid;
+      // 1) Auth (مثيل ثانوي)
+      const cred = await createUserOnSecondary({ email: email.trim(), password });
+      uid = cred.uid;
 
-      // 2) Firestore
+      // 2) Firestore — وثيقة وليّ الأمر
       await saveToFirestore("guardians", {
         role     : "guardian",
         firstName: firstName.trim(),
@@ -111,40 +219,29 @@ export default function AddGuardian() {
         phone    : phoneNorm.trim() || null,
         gender,
         address  : address.trim() || null,
-        children : children.map(c => ({
-          name: c.name?.trim() || "",
-          img : c.img || ""
-        })),
+        children : children.map(c => ({ name: c.name?.trim() || "", img: c.img || "" })),
         active   : true,
-        createdAt: new Date().toISOString(),
+        provinceName: selectedProvince?.name || "",
+        provinceCode: selectedProvince?.code || "",
+        createdAt: serverTimestamp(), // ✅ طابع زمني من الخادم
       }, { id: uid });
 
-      // 3) publicId + فهرسة لتسجيل الدخول
-      const publicId = await assignPublicIdAndIndex({
+      // 3) publicId مع بادئة المحافظة + فهرسة logins
+      const publicId = await assignPrefixedPublicId({
         uid,
         role: "guardian",
         col : "guardians",
+        prefix: selectedProvince.code,     // 👈 DAM / ALE ...
         email: email.trim() || null,
         phone: phoneNorm.trim() || null,
         displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
-        index: true,
       });
 
       setSuccess(`🎉 تم إنشاء حساب وليّ الأمر بنجاح. الكود: ${publicId}`);
-
-      // تفريغ
-      setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-      setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-      setChildren([{ id: 1, name: "", img: "" }]);
-      setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
-
+      resetForm();
     } catch (err) {
       console.error(err);
-
-      // ===== Rollback =====
-      try { await deleteSecondaryUser(); } catch {/* تجاهل */}
-      if (uid) { try { await deleteDoc(doc(db, "guardians", uid)); } catch {/* تجاهل */} }
-
+      try { await deleteSecondaryUser(); } catch {/* ignore */}
       setFormError(prettyFirebaseError(err));
     } finally {
       await signOutSecondary();
@@ -249,6 +346,33 @@ export default function AddGuardian() {
               />
             </div>
 
+            {/* المحافظة + كود المحافظة */}
+            <div className="ap-field">
+              <label><span className="ap-required">*</span> المحافظة</label>
+              <select
+                className={`ap-input ${errors.province ? "ap-invalid" : ""}`}
+                value={provinceId}
+                onChange={(e)=>setProvinceId(e.target.value)}
+              >
+                <option value="">— اختر المحافظة —</option>
+                {provinces.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {errors.province && <div className="ap-error">{errors.province}</div>}
+            </div>
+
+            <div className="ap-field">
+              <label>كود المحافظة (توليدي)</label>
+              <input
+                className="ap-input"
+                value={selectedProvince?.code || ""}
+                readOnly
+                placeholder="اختر المحافظة أولًا"
+                title="غير قابل للتعديل — يُستخدم كبادئة للكود العام"
+              />
+            </div>
+
             {/* كلمة المرور */}
             <div className="ap-field">
               <label><span className="ap-required">*</span> كلمة المرور</label>
@@ -335,18 +459,8 @@ export default function AddGuardian() {
 
             {/* الأزرار */}
             <div className="ap-actions ap-span-2">
-              <span className="ap-note">سيتم إنشاء الحساب كـ <b>وليّ أمر</b>.</span>
-              <button
-                type="button"
-                className="ap-btn"
-                onClick={() => {
-                  setFormError(""); setSuccess("");
-                  setErrors({ firstName: "", lastName: "", contact: "", password: "", confirm: "" });
-                  setFirstName(""); setLastName(""); setEmail(""); setPhone("");
-                  setGender("male"); setAddress(""); setPassword(""); setConfirm("");
-                  setChildren([{ id: 1, name: "", img: "" }]);
-                }}
-              >
+              <span className="ap-note">سيتم إنشاء الحساب كـ <b>وليّ أمر</b>. الكود العام سيبدأ بكود المحافظة.</span>
+              <button type="button" className="ap-btn" onClick={resetForm}>
                 تفريغ
               </button>
               <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>

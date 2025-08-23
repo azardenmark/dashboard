@@ -272,3 +272,131 @@
   cursor: pointer;
 }
 .login-btn:hover{ filter: brightness(1.05); }
+/* ==== Responsive Modal that respects the sidebar width ==== */
+
+/* هذه متغيّرات العرض الافتراضية للشريط */
+:root{
+  --sb-open-w: 300px;   /* عرض الشريط عندما يكون مفتوحاً */
+  --sb-rail-w:  84px;   /* عرض شريط الـ rail */
+  --sb-hidden-w: 0px;   /* مخفي */
+  --modal-hpad: 24px;   /* هوامش جانبية للـ modal */
+}
+
+/* Sidebar.jsx يضع data-sb على <html> = open | rail | hidden */
+html[data-sb="open"]  { --sb-w: var(--sb-open-w); }
+html[data-sb="rail"]  { --sb-w: var(--sb-rail-w); }
+html[data-sb="hidden"]{ --sb-w: var(--sb-hidden-w); }
+
+/* الغطاء */
+.ap-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60; /* فوق الشريط */
+  display: grid;
+  place-items: center;
+  background: rgba(10, 14, 25, .55); /* تظليل الخلفية */
+  backdrop-filter: blur(2px);
+  padding: 20px; /* تنفّس على الحواف */
+}
+
+/* اللوحة */
+.ap-modal__panel{
+  width: 100%;
+  /* العرض الأقصى يحترم الشريط الجانبي + هوامش المودال */
+  max-width: calc(100vw - var(--sb-w) - (var(--modal-hpad) * 2));
+  /* بدل السطر أعلاه يمكنك استعمال clamp لضمان حد أدنى/أقصى أنيق: */
+  max-width: clamp(320px,
+                   calc(100vw - var(--sb-w) - (var(--modal-hpad) * 2)),
+                   980px);
+
+  border-radius: 16px;
+  background: #0f1729;               /* لون اللوحة */
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 24px 80px rgba(0,0,0,.35);
+  overflow: hidden;
+}
+
+/* جسم اللوحة الداخلي */
+.ap-modal__body{
+  padding: 18px;
+  max-height: min(84vh, 860px);
+  overflow: auto;
+}
+
+/* رأس اللوحة (عنوان + إغلاق) — اختياري */
+.ap-modal__head{
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 18px;
+  background: linear-gradient(90deg,#5B65F6 0%, #7B4DE3 50%, #1BAF6B 100%);
+  color: #fff; font-weight: 700;
+}
+.ap-modal__close{
+  margin-inline-start: auto;
+  appearance: none;
+  border: 0; background: transparent; color: #fff;
+  opacity: .9; cursor: pointer;
+}
+
+/* شبكة الحقول داخل الفورم: عمودان على الشاشات العريضة، عمود على الضيقة */
+.ap-form-grid{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 880px){
+  .ap-form-grid{ grid-template-columns: 1fr; }
+}
+
+/* حقول/تلميحات الجماليات */
+.ap-field{
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ap-field label{
+  font-size: 13px; color: #cbd5e1;
+}
+.ap-field input, .ap-field select, .ap-field textarea{
+  width: 100%;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  color: #e5e7eb;
+  padding: 10px 12px;
+  border-radius: 10px;
+  outline: none;
+}
+.ap-field input::placeholder,
+.ap-field textarea::placeholder{ color: #8ea0b6; }
+
+/* أزرار أسفل المودال */
+.ap-modal__actions{
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 12px 18px 18px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+}
+.ap-btn{ padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer; }
+.ap-btn--primary{ background:#16A34A; color:#fff; }
+.ap-btn--ghost{ background:transparent; color:#cbd5e1; border:1px solid rgba(255,255,255,.12); }
+
+/* اختيار متعدد منسدِل أنيق (لو كنت تستعمله للمرحلة/الفئات) */
+.ap-multiselect{
+  position: relative;
+}
+.ap-multiselect__trigger{
+  display:flex; align-items:center; justify-content:space-between;
+  width:100%; padding:10px 12px; border-radius:10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  color:#e5e7eb; cursor:pointer;
+}
+.ap-multiselect__menu{
+  position:absolute; inset-inline:0; top: calc(100% + 6px);
+  background:#0b1220; border:1px solid rgba(255,255,255,.08);
+  border-radius:12px; padding:8px; z-index: 61; /* فوق panel */
+  max-height: 260px; overflow:auto;
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+}
+.ap-multiselect__item{
+  display:flex; align-items:center; gap:8px; padding:8px 10px;
+  color:#e5e7eb; border-radius:8px; cursor:pointer;
+}
+.ap-multiselect__item:hover{ background: rgba(255,255,255,.05); }

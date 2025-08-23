@@ -6,13 +6,18 @@ import {
   storage,
   saveToFirestore,
   linkStudentToGuardians,
-  assignPublicIdAndIndex, // ✅ لتوليد publicId وكتابته في وثيقة الطالب
+  assignPublicIdAndIndex,
 } from "../firebase";
-
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-// ————— Utils —————
+/* ——— المحافظات السورية ——— */
+const PROVINCES = [
+  "دمشق","ريف دمشق","حلب","حمص","حماة","اللاذقية","طرطوس","إدلب",
+  "دير الزور","الرقة","الحسكة","درعا","السويداء","القنيطرة",
+];
+
+/* ——— Utils ——— */
 function normalizeDigits(str = "") {
   const map = {
     "٠":"0","١":"1","٢":"2","٣":"3","٤":"4",
@@ -49,13 +54,18 @@ export default function AddStudent() {
   const refFirst = useRef(null);
   const refLast = useRef(null);
 
-  // تسلسل الروضة ← الفرع ← الصف
-  const [kgList, setKgList]         = useState([]); // {id,name}
-  const [kgId, setKgId]             = useState("");
-  const [branchList, setBranchList] = useState([]); // {id,name,kindergartenId}
-  const [branchId, setBranchId]     = useState("");
-  const [classList, setClassList]   = useState([]); // {id,name,branchId}
-  const [classId, setClassId]       = useState("");
+  // المحافظة ← الروضة ← الفرع ← الصف
+  const [province, setProvince]   = useState("");
+  const [kgList, setKgList]       = useState([]); // {id,name,province}
+  const [kgId, setKgId]           = useState("");
+  const [branchList, setBranchList] = useState([]); // {id,name,parentId}
+  const [branchId, setBranchId]   = useState("");
+  const [classList, setClassList] = useState([]); // {id,name,parentId}
+  const [classId, setClassId]     = useState("");
+
+  // السائق (اختياري)
+  const [driverList, setDriverList] = useState([]); // {id, firstName,lastName,phone}
+  const [driverId, setDriverId]     = useState("");
 
   // صورة
   const [photoFile, setPhotoFile]     = useState(null);
@@ -74,7 +84,7 @@ export default function AddStudent() {
   const [parentModal, setParentModal] = useState(null); // 'father' | 'mother' | null
   const [parentDraft, setParentDraft] = useState({ ...emptyParent });
 
-  // صحة (أقرب للواقع)
+  // صحة
   const [health, setHealth] = useState({
     heightCm:"", weightKg:"", bloodGroup:"Unknown",
     allergy:"", chronic:"", medications:"", vaccinationsUpToDate:false,
@@ -120,29 +130,42 @@ export default function AddStudent() {
     })();
   }, []);
 
-  // تحميل الفروع عند اختيار الروضة
+  // تحميل الفروع والسائقين عند اختيار الروضة
   useEffect(() => {
     setBranchList([]); setBranchId(""); setClassList([]); setClassId("");
+    setDriverList([]); setDriverId("");
     if (!kgId) return;
     (async () => {
       try {
-        const qy = query(collection(db, "branches"), where("kindergartenId","==",kgId));
+        // الفروع لدينا parentId = kgId
+        const qy = query(collection(db, "branches"), where("parentId","==",kgId));
         const snap = await getDocs(qy);
         const arr = [];
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setBranchList(arr);
       } catch (e) { /* تجاهل */ }
+
+      try {
+        // السائقون المرتبطون بهذه الروضة
+        const qd = query(collection(db, "drivers"), where("kgId","==",kgId));
+        const ds = await getDocs(qd);
+        const arrD = [];
+        ds.forEach(d => arrD.push({ id:d.id, ...(d.data()||{}) }));
+        arrD.sort((a,b)=>([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
+        setDriverList(arrD);
+      } catch (e) { /* تجاهل */ }
     })();
   }, [kgId]);
 
-  // تحميل الصفوف عند اختيار الفرع
+  // تحميل الصفوف عند اختيار الفرع (وإلا صفوف الروضة)
   useEffect(() => {
     setClassList([]); setClassId("");
-    if (!branchId) return;
+    if (!kgId) return;
     (async () => {
       try {
-        const qy = query(collection(db, "classes"), where("branchId","==",branchId));
+        const parent = branchId || kgId; // صفوف الفرع أو الروضة
+        const qy = query(collection(db, "classes"), where("parentId","==", parent));
         const snap = await getDocs(qy);
         const arr = [];
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
@@ -150,7 +173,7 @@ export default function AddStudent() {
         setClassList(arr);
       } catch (e) { /* تجاهل */ }
     })();
-  }, [branchId]);
+  }, [kgId, branchId]);
 
   // معاينة الصورة
   function onPickPhoto(file) {
@@ -170,6 +193,12 @@ export default function AddStudent() {
       return hay.includes(key);
     });
   }, [gFilter, guardians]);
+
+  // ترشيح الروضات بالمحافظة
+  const kgFiltered = useMemo(() => {
+    if (!province) return kgList;
+    return kgList.filter(k => (k.province || "") === province);
+  }, [kgList, province]);
 
   // التحقق الخفيف + تركيز على أول حقل ناقص
   function validate() {
@@ -193,7 +222,11 @@ export default function AddStudent() {
     setCode(""); setFirstName(""); setLastName(""); setDob("");
     setGender("female"); setAddress(""); setStatus("active");
     setErrors({ code:"", firstName:"", lastName:"" });
-    setKgId(""); setBranchId(""); setClassId("");
+
+    setProvince(""); setKgId(""); setBranchId(""); setClassId("");
+    setBranchList([]); setClassList([]);
+    setDriverList([]); setDriverId("");
+
     setPhotoFile(null); setPhotoPreview("");
     setSelectedGuardianIds([]); setPrimaryGuardianId(""); setGFilter("");
     setFather({ ...emptyParent }); setMother({ ...emptyParent });
@@ -220,6 +253,7 @@ export default function AddStudent() {
       const kg = kgList.find(x=>x.id===kgId) || {};
       const br = branchList.find(x=>x.id===branchId) || {};
       const cl = classList.find(x=>x.id===classId) || {};
+      const drv = driverList.find(x=>x.id===driverId) || null;
 
       const primary  = guardians.find(g=>g.id===primaryGuardianId) || null;
       const guardianIds = Array.from(new Set(selectedGuardianIds));
@@ -243,13 +277,19 @@ export default function AddStudent() {
         phone: primary?.phone || null,
         email: primary?.email || null,
 
-        // الروضة ← الفرع ← الصف
+        // المحافظة + الروضة ← الفرع ← الصف
+        province: province || kg?.province || "",
         kindergartenId: kgId || null,
         kindergartenName: kg?.name || "",
         branchId: branchId || null,
         branchName: br?.name || "",
         classId: classId || null,
         className: cl?.name || "",
+
+        // السائق (اختياري)
+        driverId: driverId || null,
+        driverName: drv ? [drv.firstName, drv.lastName].filter(Boolean).join(" ").trim() : "",
+        driverPhone: drv?.phone || "",
 
         // الأبوين
         parents: {
@@ -279,20 +319,20 @@ export default function AddStudent() {
       const { id } = await saveToFirestore("students", base);
 
       // 2) توليد/تعيين publicId (بدون فهرسة لتسجيل الدخول)
-      const publicId = await assignPublicIdAndIndex({
+      await assignPublicIdAndIndex({
         uid: id,
         role: "student",
         col : "students",
         email: base.email || null,
         phone: base.phone || null,
         displayName: `${base.firstName} ${base.lastName}`.trim(),
-        index: false, // 👈 الطالب لا يُستخدم للدخول
+        index: false,
       });
 
       // 3) ربط الطالب المختار مع أولياء الأمور (studentIds داخل وثائق guardians)
       await linkStudentToGuardians({
         studentId: id,
-        guardianIds, // ✅ إصلاح: كان guardiansAll
+        guardianIds,
       });
 
       // 4) رفع الصورة (اختياري)
@@ -304,7 +344,7 @@ export default function AddStudent() {
         await saveToFirestore("students", { photoURL: url }, { id, merge: true });
       }
 
-      setSuccess(`✅ تم إضافة الطالب وربط البيانات بنجاح. الكود: ${publicId}`);
+      setSuccess("✅ تم إضافة الطالب وربط البيانات بنجاح.");
       resetForm();
     } catch (err) {
       console.error(err);
@@ -477,7 +517,7 @@ export default function AddStudent() {
       {/* رأس */}
       <div className="ap-hero">
         <h1 className="ap-hero__title">إضافة طالب</h1>
-        <p className="ap-hero__sub">سجّل بيانات الطالب واربطه بوليّ الأمر والصف.</p>
+        <p className="ap-hero__sub">سجّل بيانات الطالب واربطه بالروضة/الفرع والصف والسائق ووليّ الأمر.</p>
       </div>
 
       {/* تبويبات */}
@@ -577,27 +617,49 @@ export default function AddStudent() {
                   onChange={(e)=>setAddress(e.target.value)}/>
               </div>
 
-              {/* الروضة ← الفرع ← الصف */}
+              {/* المحافظة → الروضة → الفرع → الصف */}
+              <div className="ap-field">
+                <label>المحافظة</label>
+                <select className="ap-input" value={province}
+                        onChange={(e)=>{ setProvince(e.target.value); setKgId(""); setBranchId(""); setClassId(""); }}>
+                  <option value="">— اختر —</option>
+                  {PROVINCES.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
               <div className="ap-field">
                 <label>الروضة</label>
-                <select className="ap-input" value={kgId} onChange={(e)=>setKgId(e.target.value)}>
-                  <option value="">— اختر —</option>
-                  {kgList.map(k=><option key={k.id} value={k.id}>{k.name || k.id}</option>)}
+                <select className="ap-input" value={kgId} onChange={(e)=>setKgId(e.target.value)}
+                        disabled={province ? kgFiltered.length===0 : kgList.length===0}>
+                  <option value="">{province ? "— اختر —" : "اختر المحافظة أولًا"}</option>
+                  {(province ? kgFiltered : kgList).map(k=><option key={k.id} value={k.id}>{k.name || k.id}</option>)}
                 </select>
               </div>
               <div className="ap-field">
                 <label>الفرع</label>
                 <select className="ap-input" value={branchId} onChange={(e)=>setBranchId(e.target.value)} disabled={!kgId}>
-                  <option value="">{kgId ? "— اختر —" : "اختر الروضة أولًا"}</option>
+                  <option value="">{kgId ? "— بدون فرع / اختر —" : "اختر الروضة أولًا"}</option>
                   {branchList.map(b=><option key={b.id} value={b.id}>{b.name || b.id}</option>)}
                 </select>
               </div>
               <div className="ap-field">
                 <label>الصف</label>
-                <select className="ap-input" value={classId} onChange={(e)=>setClassId(e.target.value)} disabled={!branchId}>
-                  <option value="">{branchId ? "— اختر —" : "اختر الفرع أولًا"}</option>
+                <select className="ap-input" value={classId} onChange={(e)=>setClassId(e.target.value)} disabled={!kgId}>
+                  <option value="">{kgId ? (branchId ? "— اختر —" : "صفوف الروضة") : "اختر الروضة أولًا"}</option>
                   {classList.map(c=><option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
+              </div>
+
+              {/* السائق (اختياري) */}
+              <div className="ap-field">
+                <label>السائق (اختياري)</label>
+                <select className="ap-input" value={driverId} onChange={(e)=>setDriverId(e.target.value)} disabled={!kgId}>
+                  <option value="">بدون سائق</option>
+                  {driverList.map(d=>{
+                    const nm = [d.firstName,d.lastName].filter(Boolean).join(" ").trim() || "سائق";
+                    return <option key={d.id} value={d.id}>{nm}{d.phone ? ` — ${d.phone}` : ""}</option>;
+                  })}
+                </select>
+                <div className="ap-note">تُعرض السائقون المرتبطون بالروضة المختارة.</div>
               </div>
 
               {/* الصورة */}

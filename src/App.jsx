@@ -5,13 +5,17 @@ import { Routes, Route, Link, Navigate, useLocation, useNavigate } from "react-r
 import Sidebar from "./components/Sidebar";
 
 // Pages
-import Kindergarten from "./pages/Kindergarten";
+import Kindergarten from "./pages/Kindergartens.jsx";
 import AddGuardian from "./pages/AddGuardian";
 import AddTeacher from "./pages/AddTeacher";
 import AddDriver from "./pages/AddDriver";
 import AddStudent from "./pages/AddStudent"; // 👈 جديد
 import Users from "./pages/Users.jsx";
 import Login from "./pages/Login";
+import KindergartensPage from "./pages/Kindergartens.jsx";
+import ProvinceKindergartensPage from "./pages/ProvinceKindergartens.jsx";
+import ClassesPage from "./pages/Classes.jsx";
+
 
 // Auth guard
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -180,6 +184,10 @@ export default function App() {
 
             {/* صفحة الدخول عامة */}
             <Route path="/login" element={<Login />} />
+            <Route path="/kindergartens" element={<KindergartensPage />} />
+            <Route path="/kindergartens/:provId" element={<ProvinceKindergartensPage />} />
+            <Route path="/classes" element={<ClassesPage />} />
+
 
             {/* 404 → الرئيسية */}
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -189,3 +197,4 @@ export default function App() {
     </div>
   );
 }
+ 
