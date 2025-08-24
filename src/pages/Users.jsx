@@ -82,9 +82,18 @@ function dobFromAgeYears(years, currentDob) {
   return `${yyyy}-${mm}-${dd}`;
 }
 function pickPhotoURL(x = {}) {
+  // نقرأ أكبر طيف ممكن من الحقول المتوقّعة
   return (
-    x.photoURL || x.avatarURL || x.avatarUrl || x.imageURL || x.imageUrl ||
-    x.profilePhotoURL || x.profilePhotoUrl || x.photo || x.image || ""
+    x.photoURL ||
+    x.avatarURL ||
+    x.avatarUrl ||
+    x.imageURL ||
+    x.imageUrl ||
+    x.profilePhotoURL ||
+    x.profilePhotoUrl ||
+    x.photo ||
+    x.image ||
+    ""
   );
 }
 
@@ -99,21 +108,61 @@ const modalStyles = {
   close: "ap-btn",
 };
 
-function Modal({ open, title, children, onClose, actions }) {
+/**
+ * Modal مرن يملأ الشاشة تلقائيًا، ويحترم عرض الشريط الجانبي عبر CSS var: --sb-w
+ * props:
+ *  - size: "wide" | "narrow"  (wide للصفحات ذات الفورم، narrow للتأكيد)
+ */
+function Modal({ open, title, children, onClose, actions, size = "wide" }) {
+  // ✅ قفل تمرير الخلفية + Esc
+  useEffect(() => {
+    if (!open) return;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    document.documentElement.classList.add("ap-modal-open");
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape" && typeof onClose === "function") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.documentElement.classList.remove("ap-modal-open");
+      document.documentElement.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
+
+  // أبعاد اللوحة الذكية
+  const panelStyle =
+    size === "wide"
+      ? {
+          // يراعي الشريط الجانبي ويملأ العرض مع هامش 48px
+          width: "clamp(360px, calc(100vw - var(--sb-w, 0px) - 48px), 1280px)",
+          maxHeight: "min(92vh, 940px)",
+        }
+      : {
+          width: "clamp(320px, calc(100vw - var(--sb-w, 0px) - 48px), 600px)",
+          maxHeight: "min(88vh, 720px)",
+        };
+
   return (
     <div className={modalStyles.backdrop} role="dialog" aria-modal="true" onClick={onClose}>
       <div
         className={modalStyles.card}
         onClick={(e)=>e.stopPropagation()}
-        // ✅ تمركز وعرض مناسب
-        style={{ width: "min(92vw, 980px)", maxHeight: "min(84vh, 860px)" }}
+        style={panelStyle}
       >
         <div className={modalStyles.head}>
           <div className={modalStyles.title}>{title}</div>
           <button className={modalStyles.close} onClick={onClose} aria-label="إغلاق">✖</button>
         </div>
-        <div className={modalStyles.body}>{children}</div>
+
+        {/* ✅ جسم المودال: حواف معقولة + يملأ الارتفاع مع تمرير داخلي */}
+        <div className={modalStyles.body} style={{ padding: 18, overflow: "auto" }}>
+          {children}
+        </div>
+
         {actions && <div className={modalStyles.foot}>{actions}</div>}
       </div>
     </div>
@@ -123,23 +172,14 @@ function Modal({ open, title, children, onClose, actions }) {
 function Confirm({ open, title="تأكيد", message, confirmText="نعم، متابعة", cancelText="إلغاء", onConfirm, onCancel }) {
   if (!open) return null;
   return (
-    <div className={modalStyles.backdrop} role="dialog" aria-modal="true" onClick={onCancel}>
-      <div
-        className={modalStyles.card}
-        onClick={(e)=>e.stopPropagation()}
-        style={{ width: "min(92vw, 560px)" }}
-      >
-        <div className={modalStyles.head}>
-          <div className={modalStyles.title}>{title}</div>
-          <button className={modalStyles.close} onClick={onCancel} aria-label="إغلاق">✖</button>
-        </div>
-        <div style={{lineHeight:1.8}}>{message}</div>
-        <div className={modalStyles.foot}>
-          <button className="ap-btn" onClick={onCancel}>{cancelText}</button>
-          <button className="ap-btn ap-btn--danger" onClick={onConfirm}>{confirmText}</button>
-        </div>
+    <Modal open={open} onClose={onCancel} title={title} size="narrow" actions={
+      <div style={{display:"contents"}}>
+        <button className="ap-btn" onClick={onCancel}>{cancelText}</button>
+        <button className="ap-btn ap-btn--danger" onClick={onConfirm}>{confirmText}</button>
       </div>
-    </div>
+    }>
+      <div style={{lineHeight:1.8}}>{message}</div>
+    </Modal>
   );
 }
 
@@ -200,7 +240,7 @@ export default function Users() {
               active: x.active !== false,
               address: x.address || "",
               gender: x.gender || "",
-              avatarUrl: pickPhotoURL(x),
+              avatarUrl: pickPhotoURL(x),  // ← التقاط الصورة من أي حقل متاح
               publicId: x.publicId || "",
               codeAlt:  x.code || "",
               raw: x,
@@ -241,6 +281,7 @@ export default function Users() {
   useEffect(()=>{
     if (!editing || editing.role!=="student" || !form) return;
     (async ()=>{
+      // فروع
       if (form.kindergartenId) {
         const qs = query(collection(db,"branches"), where("parentId","==", form.kindergartenId));
         const snap = await getDocs(qs);
@@ -248,7 +289,7 @@ export default function Users() {
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ar"));
         setBranches(arr);
       } else { setBranches([]); }
-
+      // صفوف
       const parentId = form.branchId || form.kindergartenId || "";
       if (parentId) {
         const qc = query(collection(db,"classes"), where("parentId","==", parentId));
@@ -257,7 +298,7 @@ export default function Users() {
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ar"));
         setClasses(arr);
       } else { setClasses([]); }
-
+      // سائقون
       let driverIds = [];
       if (form.branchId) {
         const b = await getDoc(doc(db,"branches",form.branchId));
@@ -332,9 +373,13 @@ export default function Users() {
       gender   : x.gender    || "male",
       address  : x.address   || "",
       active   : row.active === true,
+
+      // لعرض الصورة في نافذة العرض إن أحببت لاحقًا
       avatarUrl: pickPhotoURL(x),
+
       dob      : x.dob || "",
       ageYears : initAgeYears,
+
       publicId : row.publicId || row.codeAlt || "",
       provinceName: x.provinceName || "",
       provinceCode: x.provinceCode || "",
@@ -345,6 +390,7 @@ export default function Users() {
       classId: x.classId || "",
       className: x.className || "",
       driverId: x.driverId || "",
+
       health: {
         heightCm: x.health?.heightCm || "",
         weightKg: x.health?.weightKg || "",
@@ -387,6 +433,7 @@ export default function Users() {
         address  : form.address.trim() || null,
         active   : !!form.active,
         updatedAt: serverTimestamp(),
+        // ملاحظة: لا نلمس حقول الصورة هنا لتبقى كما هي (photoURL/avatarURL/...)
       };
 
       if (editing.role === "student") {
@@ -450,11 +497,9 @@ export default function Users() {
   const gridCols = '2fr .9fr .9fr 1.1fr 1.4fr .9fr .8fr';
 
   return (
-    // ✅ نقلل المقاسات الافتراضية عبر متغيرات CSS (أصغر من ut--large)
     <div
       className="ut-wrap"
       style={{
-        // خط أصغر وارتفاع صف أقل وصورة أصغر
         "--ut-font": "13.5px",
         "--ut-row-pad": "8px",
         "--ut-ava": "36px",
@@ -473,7 +518,6 @@ export default function Users() {
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.3-4.3" />
           </svg>
-          {/* يمكن وضع input هنا لكننا نحافظ على البنية الحالية */}
         </div>
         <input
           className="ut-search-input"
@@ -538,16 +582,16 @@ export default function Users() {
                 style={{
                   gridTemplateColumns: gridCols,
                   alignItems: "center",
-                  background: rowBg,                // ✅ تلوين متناوب
+                  background: rowBg,
                 }}
               >
                 <div className="td td-name" title={sub || r.fullName} style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>
                   <div className="avatar">
+                    {/* ← الآن نقرأ الصورة من حقول عديدة (انظر pickPhotoURL) */}
                     {r.avatarUrl ? <img src={r.avatarUrl} alt="" /> : <div className="avatar-fallback">{initials(r.fullName)}</div>}
                   </div>
                   <div className="who" style={{minWidth:0}}>
                     <div className="name" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{r.fullName}</div>
-                    {/* نخفي السطر الفرعي داخل الجدول للحفاظ على سطر واحد، مع إبقائه كتلميح */}
                     {sub ? <div className="sub" style={{display:"none"}}>{sub}</div> : null}
                   </div>
                 </div>
@@ -614,10 +658,15 @@ export default function Users() {
         open={!!viewing}
         onClose={closeView}
         title={viewing ? `عرض: ${viewing.fullName}` : ""}
+        size="wide"
         actions={<button className="ap-btn" onClick={closeView}>إغلاق</button>}
       >
         {viewing && (
-          <div className="ap-form ap-grid-2">
+          <div
+            className="ap-form"
+            // ✅ يملأ العرض بعدد أعمدة تلقائي
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+          >
             <div className="ap-field ap-span-2" style={{display:"flex",alignItems:"center",gap:12}}>
               <div className="ap-ava" style={{width:64,height:64}}>
                 {pickPhotoURL(viewing.raw)
@@ -663,6 +712,7 @@ export default function Users() {
         open={!!editing}
         onClose={saving ? undefined : closeEdit}
         title={editing ? `تعديل ${ROLE_LABEL[editing.role]} — ${editing.fullName}` : ""}
+        size="wide"
         actions={
           <>
             <span style={{flex:1}} />
@@ -678,15 +728,19 @@ export default function Users() {
         {form && (
           <>
             {editing.role==="student" && (
-              <div className="ap-tabs" style={{marginBottom:10}}>
-                <button type="button" className={`ap-btn ${tab==="basic"?"ap-btn--primary":""}`} onClick={()=>setTab("basic")} style={{marginInlineEnd:6}}>المعلومات الأساسية</button>
-                <button type="button" className={`ap-btn ${tab==="health"?"ap-btn--primary":""}`} onClick={()=>setTab("health")} style={{marginInlineEnd:6}}>الصحة</button>
+              <div className="ap-tabs" style={{marginBottom:10, display:"flex", gap:6, justifyContent:"center"}}>
+                <button type="button" className={`ap-btn ${tab==="basic"?"ap-btn--primary":""}`} onClick={()=>setTab("basic")}>المعلومات الأساسية</button>
+                <button type="button" className={`ap-btn ${tab==="health"?"ap-btn--primary":""}`} onClick={()=>setTab("health")}>الصحة</button>
                 <button type="button" className={`ap-btn ${tab==="parents"?"ap-btn--primary":""}`} onClick={()=>setTab("parents")}>الأبوين</button>
               </div>
             )}
 
             {(tab==="basic" || editing.role!=="student") && (
-              <div className="ap-form ap-grid-2">
+              <div
+                className="ap-form"
+                // ✅ Grid مرن يملأ العرض
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+              >
                 <div className="ap-field">
                   <label>الاسم</label>
                   <input className="ap-input" value={form.firstName} onChange={e=>setF("firstName", e.target.value)} />
@@ -709,7 +763,12 @@ export default function Users() {
                   <>
                     <div className="ap-field">
                       <label>تاريخ الميلاد</label>
-                      <input className="ap-input" type="date" value={form.dob || ""} onChange={(e)=>setF("dob", e.target.value)} />
+                      <input
+                        className="ap-input"
+                        type="date"
+                        value={form.dob || ""}
+                        onChange={(e)=>setF("dob", e.target.value)}
+                      />
                     </div>
 
                     <div className="ap-field">
@@ -752,18 +811,25 @@ export default function Users() {
                   <input className="ap-input" value={form.address} onChange={e=>setF("address", e.target.value)} />
                 </div>
 
+                {/* ربط الطالب */}
                 {editing.role==="student" && (
                   <>
                     <div className="ap-field">
                       <label>المحافظة</label>
-                      <select className="ap-input" value={form.provinceName} onChange={(e)=>setF("provinceName", e.target.value)}>
+                      <select className="ap-input"
+                        value={form.provinceName}
+                        onChange={(e)=>setF("provinceName", e.target.value)}
+                      >
                         <option value="">— اختر —</option>
                         {provinces.map(p=><option key={p.code} value={p.name}>{p.name}</option>)}
                       </select>
                     </div>
                     <div className="ap-field">
                       <label>الروضة</label>
-                      <select className="ap-input" value={form.kindergartenId} onChange={(e)=>setF("kindergartenId", e.target.value)}>
+                      <select className="ap-input"
+                        value={form.kindergartenId}
+                        onChange={(e)=>setF("kindergartenId", e.target.value)}
+                      >
                         <option value="">— اختر —</option>
                         {kgs
                           .filter(k=>!form.provinceName || k.provinceName===form.provinceName || k.provinceCode===form.provinceCode)
@@ -803,7 +869,10 @@ export default function Users() {
 
             {/* HEALTH */}
             {editing.role==="student" && tab==="health" && (
-              <div className="ap-form ap-grid-2">
+              <div
+                className="ap-form"
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+              >
                 <div className="ap-field"><label>الطول (سم)</label>
                   <input className="ap-input" dir="ltr" value={form.health.heightCm}
                     onChange={e=>setF("health",{...form.health, heightCm: normalizeDigits(e.target.value)})}/>
@@ -853,7 +922,11 @@ export default function Users() {
 
             {/* PARENTS */}
             {editing.role==="student" && tab==="parents" && (
-              <div className="ap-form ap-grid-2">
+              <div
+                className="ap-form"
+                style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+              >
+                {/* الأب */}
                 <div className="ap-field"><label>الأب — الاسم</label>
                   <input className="ap-input" value={form.parents.father.name}
                     onChange={e=>setF("parents",{...form.parents, father:{...form.parents.father, name:e.target.value}})}/>
@@ -875,6 +948,7 @@ export default function Users() {
                     onChange={e=>setF("parents",{...form.parents, father:{...form.parents.father, notes:e.target.value}})}/>
                 </div>
 
+                {/* الأم */}
                 <div className="ap-field"><label>الأم — الاسم</label>
                   <input className="ap-input" value={form.parents.mother.name}
                     onChange={e=>setF("parents",{...form.parents, mother:{...form.parents.mother, name:e.target.value}})}/>
