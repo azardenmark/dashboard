@@ -16,6 +16,35 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 
+/* ================== توليد أكواد ================== */
+const pad2 = (n) => String(n).padStart(2, "0");
+
+/** اختصار من اسم الروضة (مستقر حتى مع أسماء عربية) */
+function kgCodeFromName(name = "") {
+  const upperAscii = String(name).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+  if (upperAscii) return upperAscii;
+  // fallback ثابت
+  let h = 0;
+  for (const ch of String(name)) { h = ((h << 5) - h) + ch.charCodeAt(0); h |= 0; }
+  return Math.abs(h).toString(36).toUpperCase().slice(0, 6);
+}
+
+/** معاينة الرمز أثناء الكتابة (لا تحفظه) */
+function previewKgRegCode(provCode = "", name = "") {
+  if (!provCode || !String(name).trim()) return "";
+  return `${provCode}-${kgCodeFromName(name)}`;
+}
+
+/** توليد رمز تسجيل نهائي وفريد عند الإنشاء */
+async function allocateKgRegCode(provCode, name) {
+  const base = previewKgRegCode(provCode, name);
+  if (!base) return "";
+  const snap = await getDocs(query(collection(db, "kindergartens"), where("registrationCode", "==", base)));
+  // لو موجود نفسه بالكامل، أضف لاحقة رقمية بسيطة
+  if (!snap.empty) return `${base}-${Math.floor(Math.random() * 90 + 10)}`;
+  return base;
+}
+
 /* ============ قوائم احتياطية ============ */
 const DEFAULT_PROVINCES = [
   { id: "DAM", name: "دمشق", code: "DAM" },
@@ -34,13 +63,15 @@ const DEFAULT_PROVINCES = [
   { id: "QUN", name: "القنيطرة", code: "QUN" },
 ];
 
-const AGE_GROUPS = ["3-4 سنوات", "4-5 سنوات", "5-6 سنوات"];
-const STAGES = ["تمهيدي", "روضة 1", "روضة 2"];
+/* ——— الأعمار والمراحل ——— */
+// أعمار فردية (سنوات) كما طلبت: ٤–٧
+const AGE_YEARS = ["4", "5", "6", "7"];
+const STAGES = ["حضانة", "تمهيدي", "روضة 1", "روضة 2"];
 
 const BLOCK_TYPES = [
   { key: "work", label: "فترة دوام" },
   { key: "break", label: "استراحة" },
-  { key: "meal", label: "تناول طعام" },
+  { key: "meal", label: "فترة طعام" },
 ];
 
 const styles = `
@@ -74,7 +105,7 @@ const styles = `
 .icon-btn.danger{border-color:rgba(239,68,68,.4);color:#ff9c9c}
 .icon-btn.active{color:#22c55e}
 
-/* محرر (إضافة/تعديل) داخل الصفحة */
+/* محرر (إضافة/تعديل) */
 .editor{margin-bottom:16px;padding:12px}
 .editor-head{display:flex;align-items:center;gap:8px;padding:12px 14px;background:linear-gradient(90deg,#6366f1,#7c3aed,#22c55e);color:#fff;border-radius:10px}
 .editor-title{font-weight:700}
@@ -113,14 +144,16 @@ const styles = `
 .confirm{position:fixed;inset:0;background:rgba(8,12,20,.55);display:grid;place-items:center;z-index:1100}
 .confirm-box{width:min(95vw,420px);background:#0b1220;border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:16px}
 .confirm-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:12px}
+
+/* Overlay للمحرّر ليظهر وسط الشاشة */
+.kg-overlay{position:fixed;inset:0;background:rgba(8,12,20,.55);display:grid;place-items:center;padding:16px;z-index:1200}
+.kg-card{width:min(920px,92vw);max-height:92vh;overflow:auto;border-radius:14px}
 `;
 
 /* ============ أدوات ============ */
 const byId = (id) => doc(db, "kindergartens", id);
 const splitBlocks = (blocks = []) => {
-  const work = [],
-    brk = [],
-    meal = [];
+  const work = [], brk = [], meal = [];
   blocks.forEach((b) => {
     const row = { start: b.start || "", end: b.end || "" };
     if (b.type === "meal") meal.push(row);
@@ -135,7 +168,7 @@ const uniqueById = (arr) => {
   return [...m.values()];
 };
 
-/* ============ MultiSelect بسيط لقوائم نصية ============ */
+/* ============ MultiSelect بسيط ============ */
 function MultiSelect({ label, options, values, onChange, placeholder = "اختر…" }) {
   const [open, setOpen] = useState(false);
   const toggle = (opt) => {
@@ -149,42 +182,30 @@ function MultiSelect({ label, options, values, onChange, placeholder = "اختر
       <button type="button" className="ms-trigger" onClick={() => setOpen((v) => !v)}>
         <span className="ms-badges">
           {values && values.length ? (
-            values.map((v) => (
-              <span key={v} className="ms-badge">
-                {v}
-              </span>
-            ))
+            values.map((v) => <span key={v} className="ms-badge">{v}</span>)
           ) : (
             <span style={{ color: "#94a3b8" }}>{placeholder}</span>
           )}
         </span>
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" fill="none" />
-        </svg>
+        <svg width="18" height="18" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" fill="none" /></svg>
       </button>
       {open && (
         <div className="ms-menu">
-          <div className="ms-item" onClick={() => onChange(options)}>
-            تحديد الكل
-          </div>
+          <div className="ms-item" onClick={() => onChange(options)}>تحديد الكل</div>
           {options.map((opt) => (
             <div key={opt} className="ms-item" onClick={() => toggle(opt)}>
               <input type="checkbox" readOnly checked={values?.includes(opt)} />{" "}
               <span style={{ marginInlineStart: 6 }}>{opt}</span>
             </div>
           ))}
-          <div style={{ textAlign: "end" }}>
-            <button className="btn btn--ghost" onClick={() => setOpen(false)}>
-              تم
-            </button>
-          </div>
+          <div style={{ textAlign: "end" }}><button className="btn btn--ghost" onClick={() => setOpen(false)}>تم</button></div>
         </div>
       )}
     </div>
   );
 }
 
-/* ============ MultiPicker عام (ناس/خيارات مع بحث) ============ */
+/* ============ MultiPicker عام ============ */
 function MultiPicker({ label, options, values, onChange, placeholder = "اختر…" }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -208,18 +229,12 @@ function MultiPicker({ label, options, values, onChange, placeholder = "اختر
           {values && values.length ? (
             values
               .map((id) => options.find((o) => o.id === id)?.label || id)
-              .map((label) => (
-                <span key={label} className="ms-badge">
-                  {label}
-                </span>
-              ))
+              .map((label) => <span key={label} className="ms-badge">{label}</span>)
           ) : (
             <span style={{ color: "#94a3b8" }}>{placeholder}</span>
           )}
         </span>
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" fill="none" />
-        </svg>
+        <svg width="18" height="18" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" fill="none" /></svg>
       </button>
 
       {open && (
@@ -233,11 +248,7 @@ function MultiPicker({ label, options, values, onChange, placeholder = "اختر
               {opt.subtitle && <span style={{ marginInlineStart: 8, opacity: 0.6 }}>— {opt.subtitle}</span>}
             </div>
           ))}
-          <div style={{ textAlign: "end" }}>
-            <button className="btn btn--ghost" onClick={() => setOpen(false)}>
-              تم
-            </button>
-          </div>
+          <div style={{ textAlign: "end" }}><button className="btn btn--ghost" onClick={() => setOpen(false)}>تم</button></div>
         </div>
       )}
     </div>
@@ -259,26 +270,16 @@ function TimeBlocks({ label, blocks, onChange }) {
       {(blocks || []).map((b, i) => (
         <div className="block" key={i}>
           <select value={b.type || "work"} onChange={(e) => set(i, "type", e.target.value)}>
-            {BLOCK_TYPES.map((t) => (
-              <option key={t.key} value={t.key}>
-                {t.label}
-              </option>
-            ))}
+            {BLOCK_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
           </select>
           <span style={{ color: "#94a3b8" }}>من</span>
           <input type="time" value={b.start || ""} onChange={(e) => set(i, "start", e.target.value)} />
           <span style={{ color: "#94a3b8" }}>إلى</span>
           <input type="time" value={b.end || ""} onChange={(e) => set(i, "end", e.target.value)} />
-          <button type="button" className="del" onClick={() => del(i)}>
-            حذف الفترة
-          </button>
+          <button type="button" className="del" onClick={() => del(i)}>حذف الفترة</button>
         </div>
       ))}
-      <div>
-        <button type="button" className="btn btn--primary" onClick={add}>
-          إضافة فترة
-        </button>
-      </div>
+      <div><button type="button" className="btn btn--primary" onClick={add}>إضافة فترة</button></div>
     </div>
   );
 }
@@ -291,10 +292,7 @@ function Editor({ open, initial, onCancel, onSaved }) {
   const [name, setName] = useState("");
   const [provinceId, setProvinceId] = useState(""); // id/code of province
   const [provinces, setProvinces] = useState(DEFAULT_PROVINCES);
-  const selectedProvince = useMemo(
-    () => provinces.find((p) => p.id === provinceId) || null,
-    [provinceId, provinces]
-  );
+  const selectedProvince = useMemo(() => provinces.find((p) => p.id === provinceId) || null, [provinceId, provinces]);
 
   const [address, setAddress] = useState("");
   const [phone, setPhone] = useState("");
@@ -302,20 +300,31 @@ function Editor({ open, initial, onCancel, onSaved }) {
 
   const [teacherCount, setTeacherCount] = useState(0);
   const [stages, setStages] = useState([]);
-  const [ageGroups, setAgeGroups] = useState([]);
+  const [ageYears, setAgeYears] = useState([]);
+
+  // محوّل: يستخرج أرقام الأعمار من أي صيغة قديمة مثل "3-4 سنوات"
+  const toYears = (arr = []) =>
+    Array.from(new Set(arr
+      .map((g) => String(g).match(/\d+/)?.[0])
+      .filter(Boolean)
+    ));
+
   const [monthlyFee, setMonthlyFee] = useState(0);
   const [notes, setNotes] = useState("");
   const [hasTransport, setHasTransport] = useState(false);
   const [timeBlocks, setTimeBlocks] = useState([{ type: "work", start: "08:00", end: "14:00" }]);
 
-  // روابط موظفي الروضة
+  // خيارات موظفين
   const [teacherOptions, setTeacherOptions] = useState([]); // {id,label,subtitle}
   const [driverOptions, setDriverOptions] = useState([]);
   const [teacherIds, setTeacherIds] = useState(initial?.teacherIds || []);
   const [driverIds, setDriverIds] = useState(initial?.driverIds || []);
 
-  // فروع اختيارية أثناء الإنشاء/التعديل (مع بريد + موظفين)
+  // فروع يُنشَأَت مباشرة
   const [branches, setBranches] = useState([]);
+
+  // معاينة رمز التسجيل
+  const [regPreview, setRegPreview] = useState("");
 
   // تحميل المحافظات
   useEffect(() => {
@@ -334,15 +343,14 @@ function Editor({ open, initial, onCancel, onSaved }) {
     })();
   }, []);
 
-  // عندما يُفتح المحرّر نملأ الحقول من initial
+  // ملء الحقول عند الفتح
   useEffect(() => {
     if (!open) return;
     const initialProvinceCode = initial?.provinceCode || "";
     const initialProvinceName = initial?.provinceName || initial?.province || "";
     const detected =
       provinces.find((p) => p.code === initialProvinceCode) ||
-      provinces.find((p) => p.name === initialProvinceName) ||
-      null;
+      provinces.find((p) => p.name === initialProvinceName) || null;
 
     setName(initial?.name || "");
     setProvinceId(detected?.id || "");
@@ -351,69 +359,65 @@ function Editor({ open, initial, onCancel, onSaved }) {
     setEmail(initial?.email || "");
     setTeacherCount(initial?.teacherCount || 0);
     setStages(initial?.stages || []);
-    setAgeGroups(initial?.ageGroups || []);
+    setAgeYears(toYears(initial?.ageYears || initial?.ageGroups || [])); // ✅
+
     setMonthlyFee(initial?.monthlyFee || 0);
     setNotes(initial?.notes || "");
     setHasTransport(initial?.hasTransport ?? false);
     setTimeBlocks(
       initial?.timeBlocks ||
-        (initial?.workRanges ? initial.workRanges.map((r) => ({ type: "work", ...r })) : [{ type: "work", start: "08:00", end: "14:00" }])
+      (initial?.workRanges ? initial.workRanges.map((r) => ({ type: "work", ...r })) : [{ type: "work", start: "08:00", end: "14:00" }])
     );
     setTeacherIds(initial?.teacherIds || []);
     setDriverIds(initial?.driverIds || []);
     setBranches([]);
   }, [open, initial, provinces]);
 
-  // جلب معلّمين/سائقين المحافظة المحددة
+  // تحديث معاينة رمز التسجيل (نسخة واحدة فقط)
+  useEffect(() => {
+    const fixed = (isEdit && initial?.registrationCode) ? initial.registrationCode : "";
+    const pv = previewKgRegCode(selectedProvince?.code || "", name);
+    setRegPreview(fixed || pv);
+  }, [isEdit, initial?.registrationCode, selectedProvince?.code, name]);
+
+  // جلب موظفي المحافظة
   useEffect(() => {
     (async () => {
       if (!selectedProvince) {
-        setTeacherOptions([]);
-        setDriverOptions([]);
-        return;
+        setTeacherOptions([]); setDriverOptions([]); return;
       }
       const provCode = selectedProvince.code;
       const provName = selectedProvince.name;
 
-      // Teachers
       const t1 = await getDocs(query(collection(db, "teachers"), where("provinceCode", "==", provCode)));
       const t2 = await getDocs(query(collection(db, "teachers"), where("provinceName", "==", provName)));
-      let t = uniqueById(
-        [...t1.docs, ...t2.docs].map((d) => {
-          const x = d.data() || {};
-          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-        })
-      );
+      let t = uniqueById([...t1.docs, ...t2.docs].map((d) => {
+        const x = d.data() || {};
+        return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+      }));
       if (t.length === 0) {
         const all = await getDocs(collection(db, "teachers"));
-        t = all.docs
-          .filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`))
-          .map((d) => {
-            const x = d.data() || {};
-            return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-          });
+        t = all.docs.filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`)).map((d) => {
+          const x = d.data() || {};
+          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+        });
       }
       t.sort((a, b) => a.label.localeCompare(b.label, "ar"));
       setTeacherOptions(t);
       setTeacherIds((prev) => prev.filter((id) => t.some((o) => o.id === id)));
 
-      // Drivers
       const d1 = await getDocs(query(collection(db, "drivers"), where("provinceCode", "==", provCode)));
       const d2 = await getDocs(query(collection(db, "drivers"), where("provinceName", "==", provName)));
-      let d = uniqueById(
-        [...d1.docs, ...d2.docs].map((dd) => {
-          const x = dd.data() || {};
-          return { id: dd.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || dd.id, subtitle: x.email || "" };
-        })
-      );
+      let d = uniqueById([...d1.docs, ...d2.docs].map((dd) => {
+        const x = dd.data() || {};
+        return { id: dd.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || dd.id, subtitle: x.email || "" };
+      }));
       if (d.length === 0) {
         const all = await getDocs(collection(db, "drivers"));
-        d = all.docs
-          .filter((dd) => (dd.data()?.publicId || "").startsWith(`${provCode}-`))
-          .map((dd) => {
-            const x = dd.data() || {};
-            return { id: dd.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || dd.id, subtitle: x.email || "" };
-          });
+        d = all.docs.filter((dd) => (dd.data()?.publicId || "").startsWith(`${provCode}-`)).map((dd) => {
+          const x = dd.data() || {};
+          return { id: dd.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || dd.id, subtitle: x.email || "" };
+        });
       }
       d.sort((a, b) => a.label.localeCompare(b.label, "ar"));
       setDriverOptions(d);
@@ -422,31 +426,19 @@ function Editor({ open, initial, onCancel, onSaved }) {
   }, [selectedProvince]);
 
   const addBranch = () =>
-    setBranches((p) => [
-      ...p,
-      {
-        name: "",
-        phone: "",
-        address: "",
-        email: "",
-        timeBlocks: [{ type: "work", start: "08:00", end: "14:00" }],
-        teacherIds: [],
-        driverIds: [],
-      },
-    ]);
-  const setB = (i, k, v) => {
-    const nx = [...branches];
-    nx[i] = { ...nx[i], [k]: v };
-    setBranches(nx);
-  };
+    setBranches((p) => [...p, {
+      name: "", phone: "", address: "", email: "",
+      timeBlocks: [{ type: "work", start: "08:00", end: "14:00" }],
+      teacherIds: [], driverIds: [],
+    }]);
+  const setB = (i, k, v) => { const nx = [...branches]; nx[i] = { ...nx[i], [k]: v }; setBranches(nx); };
   const delB = (i) => setBranches((p) => p.filter((_, idx) => idx !== i));
 
   if (!open) return null;
 
   const save = async () => {
     if (!name.trim() || !selectedProvince) {
-      alert("أدخل اسم الروضة واختر المحافظة.");
-      return;
+      alert("أدخل اسم الروضة واختر المحافظة."); return;
     }
     const { work, brk, meal } = splitBlocks(timeBlocks);
     const payload = {
@@ -458,31 +450,57 @@ function Editor({ open, initial, onCancel, onSaved }) {
       email: email.trim(),
       teacherCount: Number(teacherCount) || 0,
       stages,
-      ageGroups,
+      // نحفظ الأعمار كأرقام + نكتب ageGroups للتوافق
+      ageYears: (ageYears || [])
+        .map((y) => Number(String(y).replace(/\D/g, "")))
+        .filter((n) => !isNaN(n)),
+      ageGroups: (ageYears || []).map((y) => `${String(y).replace(/\D/g, "")} سنوات`),
+
       monthlyFee: Number(monthlyFee) || 0,
       notes: notes.trim(),
       hasTransport: !!hasTransport,
-      timeBlocks,
-      workRanges: work,
-      breakRanges: brk,
-      mealRanges: meal,
-      teacherIds,
-      driverIds,
+      timeBlocks, workRanges: work, breakRanges: brk, mealRanges: meal,
+      teacherIds, driverIds,
       updatedAt: serverTimestamp(),
       ...(isEdit ? {} : { createdAt: serverTimestamp(), active: true, branchCount: 0 }),
     };
 
     let kgId = initial?.id;
+    let regCodeForBranches = initial?.registrationCode || ""; // سنستخدمه للفروع
+
     if (isEdit) {
       await updateDoc(byId(kgId), payload);
+
+      // لو الروضة القديمة بلا أكواد، أنشئها الآن مرة واحدة
+      if (!initial?.registrationCode || !initial?.kgCode) {
+        const kgShort = kgCodeFromName(name);
+        const newReg = initial?.registrationCode || await allocateKgRegCode(selectedProvince.code, name);
+        await updateDoc(byId(kgId), {
+          kgCode: kgShort,
+          registrationCode: newReg,
+          updatedAt: serverTimestamp(),
+        });
+        regCodeForBranches = newReg;
+      }
     } else {
-      const ref = await addDoc(collection(db, "kindergartens"), payload);
+      // إنشاء جديد: احجز الرمز مسبقًا ثم خزّنه مع الوثيقة
+      const kgShort = kgCodeFromName(name);
+      const regCode = await allocateKgRegCode(selectedProvince.code, name);
+      const ref = await addDoc(collection(db, "kindergartens"), {
+        ...payload,
+        kgCode: kgShort,
+        registrationCode: regCode,
+      });
       kgId = ref.id;
+      regCodeForBranches = regCode;
     }
 
     // إنشاء فروع مضافة من نفس المحرّر
-    for (const b of branches) {
+    for (let i = 0; i < branches.length; i++) {
+      const b = branches[i];
       const { work: w, brk: bk, meal: ml } = splitBlocks(b.timeBlocks || []);
+      const branchReg = regCodeForBranches ? `${regCodeForBranches}-${pad2(i + 1)}` : null;
+
       await addDoc(collection(db, "branches"), {
         parentId: kgId,
         parentName: name.trim(),
@@ -495,9 +513,8 @@ function Editor({ open, initial, onCancel, onSaved }) {
         teacherIds: Array.from(new Set(b.teacherIds || [])),
         driverIds: Array.from(new Set(b.driverIds || [])),
         timeBlocks: b.timeBlocks || [],
-        workRanges: w,
-        breakRanges: bk,
-        mealRanges: ml,
+        workRanges: w, breakRanges: bk, mealRanges: ml,
+        registrationCode: branchReg,              // ⭐️ كود الفرع
         active: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -513,12 +530,8 @@ function Editor({ open, initial, onCancel, onSaved }) {
       <div className="editor-head">
         <div className="editor-title">{isEdit ? "تعديل بيانات الروضة" : "إضافة روضة جديدة"}</div>
         <div style={{ marginInlineStart: "auto", display: "flex", gap: 8 }}>
-          <button className="btn btn--ghost" onClick={onCancel}>
-            إلغاء
-          </button>
-          <button className="btn btn--primary" onClick={save}>
-            {isEdit ? "حفظ" : "إنشاء"}
-          </button>
+          <button className="btn btn--ghost" onClick={onCancel}>إلغاء</button>
+          <button className="btn btn--primary" onClick={save}>{isEdit ? "حفظ" : "إنشاء"}</button>
         </div>
       </div>
 
@@ -529,16 +542,22 @@ function Editor({ open, initial, onCancel, onSaved }) {
             <label>المحافظة</label>
             <select value={provinceId} onChange={(e) => setProvinceId(e.target.value)}>
               <option value="">اختر محافظة…</option>
-              {provinces.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              {provinces.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
           <div className="field col-6">
             <label>اسم الروضة</label>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="مثال: روضة الزهور" />
+          </div>
+
+          {/* معاينة رمز التسجيل */}
+          <div className="field col-12">
+            <label>رمز التسجيل (يتولّد تلقائيًا)</label>
+            <input
+              value={regPreview || "اختر المحافظة واكتب اسم الروضة…"}
+              readOnly
+              title="يتولّد من كود المحافظة + اختصار اسم الروضة"
+            />
           </div>
 
           {/* هاتف + بريد */}
@@ -559,8 +578,9 @@ function Editor({ open, initial, onCancel, onSaved }) {
 
           {/* معطيات تعليمية */}
           <div className="field col-6">
-            <label>عدد المعلمين</label>
+            <label>عدد المعلمين (تعريفي)</label>
             <input type="number" min="0" value={teacherCount} onChange={(e) => setTeacherCount(e.target.value)} />
+            <div className="chip" style={{marginTop:6}}>العداد الفعلي يُحسب تلقائيًا في الجدول</div>
           </div>
           <div className="field col-6">
             <label>القسط الشهري (اختياري)</label>
@@ -571,7 +591,13 @@ function Editor({ open, initial, onCancel, onSaved }) {
             <MultiSelect label="المراحل التعليمية" options={STAGES} values={stages} onChange={setStages} placeholder="اختر المراحل (يمكن عدة عناصر)" />
           </div>
           <div className="col-6">
-            <MultiSelect label="الفئات العمرية" options={AGE_GROUPS} values={ageGroups} onChange={setAgeGroups} placeholder="اختر الفئات (يمكن عدة عناصر)" />
+            <MultiSelect
+              label="الأعمار (سنوات)"
+              options={AGE_YEARS}
+              values={ageYears.map(String)}
+              onChange={setAgeYears}
+              placeholder="اختر الأعمار (يمكن عدة عناصر)"
+            />
           </div>
 
           <TimeBlocks label="الفترات الزمنية (دوام/استراحة/طعام)" blocks={timeBlocks} onChange={setTimeBlocks} />
@@ -602,13 +628,11 @@ function Editor({ open, initial, onCancel, onSaved }) {
             <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="معلومات إضافية / خدمات / تعليمات…" />
           </div>
 
-          {/* فروع اختيارية */}
+          {/* فروع اختيارية تنشأ مع الروضة */}
           <div className="col-12 subcard">
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <strong>إضافة فروع (اختياري)</strong>
-              <button type="button" className="btn btn--ghost" onClick={addBranch}>
-                + إضافة فرع
-              </button>
+              <button type="button" className="btn btn--ghost" onClick={addBranch}>+ إضافة فرع</button>
             </div>
 
             {branches.map((b, i) => (
@@ -630,7 +654,6 @@ function Editor({ open, initial, onCancel, onSaved }) {
                   <label>البريد الإلكتروني (اختياري)</label>
                   <input value={b.email} onChange={(e) => setB(i, "email", e.target.value)} placeholder="branch@example.com" />
                 </div>
-
                 <div className="col-6" />
 
                 <div className="col-6">
@@ -654,9 +677,7 @@ function Editor({ open, initial, onCancel, onSaved }) {
 
                 <TimeBlocks label="فترات الفرع" blocks={b.timeBlocks} onChange={(nb) => setB(i, "timeBlocks", nb)} />
                 <div className="col-12" style={{ textAlign: "end" }}>
-                  <button type="button" className="btn btn--danger" onClick={() => delB(i)}>
-                    حذف الفرع
-                  </button>
+                  <button type="button" className="btn btn--danger" onClick={() => delB(i)}>حذف الفرع</button>
                 </div>
               </div>
             ))}
@@ -676,20 +697,16 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
   const [email, setEmail] = useState(initial?.email || "");
   const [timeBlocks, setTimeBlocks] = useState(initial?.timeBlocks || [{ type: "work", start: "08:00", end: "14:00" }]);
 
-  // اختيارات الموظفين لهذا الفرع
+  // اختيارات الموظفين
   const [teacherOptions, setTeacherOptions] = useState([]); // [{id,label}]
   const [driverOptions, setDriverOptions] = useState([]); // [{id,label}]
   const [teacherIds, setTeacherIds] = useState(initial?.teacherIds || []);
   const [driverIds, setDriverIds] = useState(initial?.driverIds || []);
 
   useEffect(() => {
-    setName(initial?.name || "");
-    setPhone(initial?.phone || "");
-    setAddress(initial?.address || "");
-    setEmail(initial?.email || "");
-    setTimeBlocks(initial?.timeBlocks || [{ type: "work", start: "08:00", end: "14:00" }]);
-    setTeacherIds(initial?.teacherIds || []);
-    setDriverIds(initial?.driverIds || []);
+    setName(initial?.name || ""); setPhone(initial?.phone || ""); setAddress(initial?.address || "");
+    setEmail(initial?.email || ""); setTimeBlocks(initial?.timeBlocks || [{ type: "work", start: "08:00", end: "14:00" }]);
+    setTeacherIds(initial?.teacherIds || []); setDriverIds(initial?.driverIds || []);
   }, [initial]);
 
   // جلب معلّمي/سائقي المحافظة تبع الروضة الأم
@@ -697,51 +714,37 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
     (async () => {
       const provName = parent?.provinceName || parent?.province || "";
       const provCode = parent?.provinceCode || "";
-      if (!provName && !provCode) {
-        setTeacherOptions([]);
-        setDriverOptions([]);
-        return;
-      }
+      if (!provName && !provCode) { setTeacherOptions([]); setDriverOptions([]); return; }
 
-      // Teachers
       const t1 = provCode ? await getDocs(query(collection(db, "teachers"), where("provinceCode", "==", provCode))) : { docs: [] };
       const t2 = provName ? await getDocs(query(collection(db, "teachers"), where("provinceName", "==", provName))) : { docs: [] };
-      let teachers = uniqueById(
-        [...t1.docs, ...t2.docs].map((d) => {
-          const x = d.data() || {};
-          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-        })
-      );
+      let teachers = uniqueById([...t1.docs, ...t2.docs].map((d) => {
+        const x = d.data() || {};
+        return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+      }));
       if (teachers.length === 0 && provCode) {
         const allT = await getDocs(collection(db, "teachers"));
-        teachers = allT.docs
-          .filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`))
-          .map((d) => {
-            const x = d.data() || {};
-            return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-          });
+        teachers = allT.docs.filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`)).map((d) => {
+          const x = d.data() || {};
+          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+        });
       }
       teachers.sort((a, b) => a.label.localeCompare(b.label, "ar"));
       setTeacherOptions(teachers);
       setTeacherIds((prev) => prev.filter((id) => teachers.some((t) => t.id === id)));
 
-      // Drivers
       const d1 = provCode ? await getDocs(query(collection(db, "drivers"), where("provinceCode", "==", provCode))) : { docs: [] };
       const d2 = provName ? await getDocs(query(collection(db, "drivers"), where("provinceName", "==", provName))) : { docs: [] };
-      let drivers = uniqueById(
-        [...d1.docs, ...d2.docs].map((d) => {
-          const x = d.data() || {};
-          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-        })
-      );
+      let drivers = uniqueById([...d1.docs, ...d2.docs].map((d) => {
+        const x = d.data() || {};
+        return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+      }));
       if (drivers.length === 0 && provCode) {
         const allD = await getDocs(collection(db, "drivers"));
-        drivers = allD.docs
-          .filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`))
-          .map((d) => {
-            const x = d.data() || {};
-            return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
-          });
+        drivers = allD.docs.filter((d) => (d.data()?.publicId || "").startsWith(`${provCode}-`)).map((d) => {
+          const x = d.data() || {};
+          return { id: d.id, label: `${x.firstName || ""} ${x.lastName || ""}`.trim() || d.id, subtitle: x.email || "" };
+        });
       }
       drivers.sort((a, b) => a.label.localeCompare(b.label, "ar"));
       setDriverOptions(drivers);
@@ -750,10 +753,7 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
   }, [parent?.provinceName, parent?.province, parent?.provinceCode]);
 
   const save = async () => {
-    if (!name.trim()) {
-      alert("أدخل اسم الفرع.");
-      return;
-    }
+    if (!name.trim()) { alert("أدخل اسم الفرع."); return; }
     const { work, brk, meal } = splitBlocks(timeBlocks);
     const payload = {
       name: name.trim(),
@@ -772,12 +772,16 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
     if (isEdit) {
       await updateDoc(doc(db, "branches", initial.id), payload);
     } else {
+      const nextNum = Number(parent?.branchCount || 0) + 1;
+      const branchReg = parent?.registrationCode ? `${parent.registrationCode}-${pad2(nextNum)}` : null;
+
       await addDoc(collection(db, "branches"), {
         parentId: parent.id,
         parentName: parent.name,
         provinceName: parent.provinceName || parent.province || "",
         provinceCode: parent.provinceCode || "",
         ...payload,
+        registrationCode: branchReg,   // ⭐️ كود الفرع
         active: true,
         createdAt: serverTimestamp(),
       });
@@ -809,32 +813,16 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
         <div className="col-6" />
 
         <div className="col-6">
-          <MultiPicker
-            label="معلّمو هذا الفرع"
-            options={teacherOptions}
-            values={teacherIds}
-            onChange={setTeacherIds}
-            placeholder="اختر المعلّمين…"
-          />
+          <MultiPicker label="معلّمو هذا الفرع" options={teacherOptions} values={teacherIds} onChange={setTeacherIds} placeholder="اختر المعلّمين…" />
         </div>
         <div className="col-6">
-          <MultiPicker
-            label="سائقو هذا الفرع"
-            options={driverOptions}
-            values={driverIds}
-            onChange={setDriverIds}
-            placeholder="اختر السائقين…"
-          />
+          <MultiPicker label="سائقو هذا الفرع" options={driverOptions} values={driverIds} onChange={setDriverIds} placeholder="اختر السائقين…" />
         </div>
 
         <TimeBlocks label="فترات الفرع" blocks={timeBlocks} onChange={setTimeBlocks} />
         <div className="col-12" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn btn--ghost" onClick={onCancel}>
-            إلغاء
-          </button>
-          <button className="btn btn--primary" onClick={save}>
-            {isEdit ? "حفظ" : "إضافة الفرع"}
-          </button>
+          <button className="btn btn--ghost" onClick={onCancel}>إلغاء</button>
+          <button className="btn btn--primary" onClick={save}>{isEdit ? "حفظ" : "إضافة الفرع"}</button>
         </div>
       </div>
     </div>
@@ -845,7 +833,7 @@ function BranchEditor({ parent, initial, onCancel, onSaved }) {
 function BranchPanel({ parent, onClose }) {
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null); // فرع يتم تعديله، null = لا يوجد
+  const [editing, setEditing] = useState(null);
   const [confirm, setConfirm] = useState({ open: false, branch: null });
 
   useEffect(() => {
@@ -864,8 +852,7 @@ function BranchPanel({ parent, onClose }) {
 
   const askDelete = (b) => setConfirm({ open: true, branch: b });
   const doDelete = async () => {
-    const b = confirm.branch;
-    if (!b) return;
+    const b = confirm.branch; if (!b) return;
     await deleteDoc(doc(db, "branches", b.id));
     await updateDoc(byId(parent.id), { branchCount: increment(-1), updatedAt: serverTimestamp() });
     setConfirm({ open: false, branch: null });
@@ -876,18 +863,11 @@ function BranchPanel({ parent, onClose }) {
       <div className="branch-head">
         <strong>فروع — {parent.name}</strong>
         <div style={{ marginInlineStart: "auto", display: "flex", gap: 8 }}>
-          {editing ? null : (
-            <button className="btn btn--primary" onClick={() => setEditing({})}>
-              + إضافة فرع
-            </button>
-          )}
-          <button className="btn btn--ghost" onClick={onClose}>
-            إغلاق
-          </button>
+          {!editing && <button className="btn btn--primary" onClick={() => setEditing({})}>+ إضافة فرع</button>}
+          <button className="btn btn--ghost" onClick={onClose}>إغلاق</button>
         </div>
       </div>
 
-      {/* محرر فرع */}
       {editing && <BranchEditor parent={parent} initial={editing.id ? editing : null} onCancel={() => setEditing(null)} onSaved={() => setEditing(null)} />}
 
       <div className="table-wrap">
@@ -900,7 +880,8 @@ function BranchPanel({ parent, onClose }) {
                 <th>الفرع</th>
                 <th>الهاتف</th>
                 <th>العنوان</th>
-                <th>البريد</th> {/* جديد */}
+                <th>البريد</th>
+                <th>رمز الفرع</th>
                 <th>نشِط</th>
                 <th>إجراءات</th>
               </tr>
@@ -912,35 +893,23 @@ function BranchPanel({ parent, onClose }) {
                   <td>{b.phone || "—"}</td>
                   <td>{b.address || "—"}</td>
                   <td>{b.email || "—"}</td>
+                  <td className="nowrap">{b.registrationCode || "—"}</td>
                   <td>
                     <button className={`icon-btn ${b.active ? "active" : ""}`} onClick={() => toggleActive(b)} title={b.active ? "نشِط (اضغط للتعطيل)" : "متوقف (اضغط للتفعيل)"}>
                       {b.active ? (
-                        <svg viewBox="0 0 24 24" width="18" height="18">
-                          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2" />
-                          <path d="M8 12l3 3 5-6" fill="none" stroke="currentColor" strokeWidth="2" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M8 12l3 3 5-6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
                       ) : (
-                        <svg viewBox="0 0 24 24" width="18" height="18">
-                          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2" />
-                          <path d="M8 12h8" fill="none" stroke="currentColor" strokeWidth="2" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M8 12h8" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
                       )}
                     </button>
                   </td>
                   <td>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button className="icon-btn" title="تعديل" onClick={() => setEditing(b)}>
-                        <svg viewBox="0 0 24 24" width="18" height="18">
-                          <path d="M12 20h9" stroke="currentColor" strokeWidth="2" />
-                          <path d="M16.5 3.5a2.1 2.1 0 113 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 20h9" stroke="currentColor" strokeWidth="2" /><path d="M16.5 3.5a2.1 2.1 0 113 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
                       </button>
                       <button className="icon-btn danger" title="حذف" onClick={() => askDelete(b)}>
-                        <svg viewBox="0 0 24 24" width="18" height="18">
-                          <path d="M3 6h18" stroke="currentColor" strokeWidth="2" />
-                          <path d="M8 6v14m8-14v14" stroke="currentColor" strokeWidth="2" />
-                          <path d="M5 6l1 14a2 2 0 002 2h8a2 2 0 002-2l1-14M9 6l1-2h4l1 2" fill="none" stroke="currentColor" strokeWidth="2" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18" stroke="currentColor" strokeWidth="2" /><path d="M8 6v14m8-14v14" stroke="currentColor" strokeWidth="2" /><path d="M5 6l1 14a2 2 0 002 2h8a2 2 0 002-2l1-14M9 6l1-2h4l1 2" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
                       </button>
                     </div>
                   </td>
@@ -956,16 +925,10 @@ function BranchPanel({ parent, onClose }) {
         <div className="confirm" onMouseDown={(e) => { if (e.target === e.currentTarget) setConfirm({ open: false, branch: null }); }}>
           <div className="confirm-box">
             <div style={{ fontWeight: 700, marginBottom: 6 }}>تأكيد الحذف</div>
-            <div style={{ color: "#cbd5e1" }}>
-              حذف الفرع: <strong>{confirm.branch?.name}</strong>؟
-            </div>
+            <div style={{ color: "#cbd5e1" }}>حذف الفرع: <strong>{confirm.branch?.name}</strong>؟</div>
             <div className="confirm-actions">
-              <button className="btn btn--ghost" onClick={() => setConfirm({ open: false, branch: null })}>
-                لا
-              </button>
-              <button className="btn btn--danger" onClick={doDelete}>
-                نعم، حذف
-              </button>
+              <button className="btn btn--ghost" onClick={() => setConfirm({ open: false, branch: null })}>لا</button>
+              <button className="btn btn--danger" onClick={doDelete}>نعم، حذف</button>
             </div>
           </div>
         </div>
@@ -985,12 +948,8 @@ function ConfirmDelete({ open, name, onNo, onYes }) {
           هل تريد حذف الروضة: <strong>{name}</strong>؟ هذا الإجراء لا يمكن التراجع عنه.
         </div>
         <div className="confirm-actions">
-          <button className="btn btn--ghost" onClick={onNo}>
-            لا
-          </button>
-          <button className="btn btn--danger" onClick={onYes}>
-            نعم، حذف
-          </button>
+          <button className="btn btn--ghost" onClick={onNo}>لا</button>
+          <button className="btn btn--danger" onClick={onYes}>نعم، حذف</button>
         </div>
       </div>
     </div>
@@ -1040,14 +999,18 @@ export default function KindergartensPage(){
         <div>إدارة الروضات السورية، الفروع، والفترات الزمنية.</div>
       </div>
 
-      {/* المحرّر (إضافة/تعديل) */}
+      {/* المحرّر (Overlay في الوسط) */}
       {showForm && (
-        <Editor
-          open={showForm}
-          initial={editing}
-          onCancel={()=>{ setShowForm(false); setEditing(null); }}
-          onSaved={()=>{ setShowForm(false); setEditing(null); }}
-        />
+        <div className="kg-overlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) { setShowForm(false); setEditing(null); } }}>
+          <div className="kg-card section" onMouseDown={(e)=>e.stopPropagation()}>
+            <Editor
+              open={showForm}
+              initial={editing}
+              onCancel={()=>{ setShowForm(false); setEditing(null); }}
+              onSaved={()=>{ setShowForm(false); setEditing(null); }}
+            />
+          </div>
+        </div>
       )}
 
       {/* شريط أدوات أعلى الجدول */}
@@ -1067,6 +1030,7 @@ export default function KindergartensPage(){
                 <tr>
                   <th className="nowrap">الروضة</th>
                   <th className="nowrap">المحافظة</th>
+                  <th className="nowrap">رمز التسجيل</th>
                   <th className="nowrap">الهاتف</th>
                   <th className="nowrap">المراحل</th>
                   <th className="nowrap">الفئات</th>
@@ -1084,6 +1048,7 @@ export default function KindergartensPage(){
                         <div style={{fontSize:12,color:"#94a3b8"}}>{kg.address||"—"}</div>
                       </td>
                       <td>{kg.provinceName || kg.province || "—"}</td>
+                      <td className="nowrap">{kg.registrationCode ? <span className="pill" title="رمز تسجيل الروضة">{kg.registrationCode}</span> : "—"}</td>
                       <td>{kg.phone||"—"}</td>
                       <td>
                         <div className="chips" title={(kg.stages||[]).join("، ")}>
@@ -1091,12 +1056,23 @@ export default function KindergartensPage(){
                         </div>
                       </td>
                       <td>
-                        <div className="chips" title={(kg.ageGroups||[]).join("، ")}>
-                          {(kg.ageGroups||[]).length? kg.ageGroups.map(a=><span key={a} className="chip">{a}</span>) : "—"}
+                        <div
+                          className="chips"
+                          title={
+                            (kg.ageYears?.length
+                              ? kg.ageYears.map((y) => `${y} سنوات`).join("، ")
+                              : (kg.ageGroups || []).join("، "))
+                            || ""
+                          }
+                        >
+                          {kg.ageYears?.length
+                            ? kg.ageYears.map((y) => <span key={y} className="chip">{y} س</span>)
+                            : (kg.ageGroups?.length
+                                ? kg.ageGroups.map((g) => <span key={g} className="chip">{g}</span>)
+                                : "—")}
                         </div>
                       </td>
                       <td>
-                        {/* رقم فقط — مع فتح لوحة الفروع عند النقر */}
                         <span className="pill" title="عرض/إدارة الفروع" onClick={()=>toggleBranches(kg)}>
                           {kg.branchCount || 0}
                         </span>
@@ -1108,43 +1084,27 @@ export default function KindergartensPage(){
                           title={kg.active? "نشِطة (انقر للتعطيل)":"متوقفة (انقر للتفعيل)"}
                         >
                           {kg.active ? (
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
-                              <path d="M8 12l3 3 5-6" fill="none" stroke="currentColor" strokeWidth="2"/>
-                            </svg>
+                            <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 12l3 3 5-6" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
                           ) : (
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
-                              <path d="M8 12h8" fill="none" stroke="currentColor" strokeWidth="2"/>
-                            </svg>
+                            <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M8 12h8" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
                           )}
                         </button>
                       </td>
                       <td>
                         <div style={{display:"flex",gap:8}}>
-                          <button className="icon-btn" title="تعديل"
-                                  onClick={()=>{ setEditing(kg); setShowForm(true); }}>
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <path d="M12 20h9" stroke="currentColor" strokeWidth="2"/>
-                              <path d="M16.5 3.5a2.1 2.1 0 113 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2"/>
-                            </svg>
+                          <button className="icon-btn" title="تعديل" onClick={()=>{ setEditing(kg); setShowForm(true); }}>
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 20h9" stroke="currentColor" strokeWidth="2"/><path d="M16.5 3.5a2.1 2.1 0 113 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
                           </button>
-                          <button className="icon-btn danger" title="حذف"
-                                  onClick={()=>askDelete(kg)}>
-                            <svg viewBox="0 0 24 24" width="18" height="18">
-                              <path d="M3 6h18" stroke="currentColor" strokeWidth="2"/>
-                              <path d="M8 6v14m8-14v14" stroke="currentColor" strokeWidth="2"/>
-                              <path d="M5 6l1 14a2 2 0 002 2h8a2 2 0 002-2l1-14M9 6l1-2h4l1 2" fill="none" stroke="currentColor" strokeWidth="2"/>
-                            </svg>
+                          <button className="icon-btn danger" title="حذف" onClick={()=>askDelete(kg)}>
+                            <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18" stroke="currentColor" strokeWidth="2"/><path d="M8 6v14m8-14v14" stroke="currentColor" strokeWidth="2"/><path d="M5 6l1 14a2 2 0 002 2h8a2 2 0 002-2l1-14M9 6l1-2h4l1 2" fill="none" stroke="currentColor" strokeWidth="2"/></svg>
                           </button>
                         </div>
                       </td>
                     </tr>
 
-                    {/* لوحة الفروع للروضة المفتوحة */}
                     {expandedKgId===kg.id && (
                       <tr>
-                        <td colSpan={8}>
+                        <td colSpan={9}>
                           <BranchPanel parent={kg} onClose={()=>setExpandedKgId(null)} />
                         </td>
                       </tr>

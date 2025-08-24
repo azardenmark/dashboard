@@ -1,3 +1,4 @@
+// src/App.jsx
 import React, { useCallback, useEffect, useState } from "react";
 import { Routes, Route, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
@@ -9,18 +10,19 @@ import Kindergarten from "./pages/Kindergartens.jsx";
 import AddGuardian from "./pages/AddGuardian";
 import AddTeacher from "./pages/AddTeacher";
 import AddDriver from "./pages/AddDriver";
-import AddStudent from "./pages/AddStudent"; // 👈 جديد
+import AddStudent from "./pages/AddStudent";
 import Users from "./pages/Users.jsx";
 import Login from "./pages/Login";
 import KindergartensPage from "./pages/Kindergartens.jsx";
 import ProvinceKindergartensPage from "./pages/ProvinceKindergartens.jsx";
 import ClassesPage from "./pages/Classes.jsx";
-
+import ClassCreatePage from "./pages/ClassCreate.jsx";
+import ChangeClass from "./pages/ChangeClass.jsx"; // 👈 صفحة نقل الطلاب (جديدة)
 
 // Auth guard
 import ProtectedRoute from "./components/ProtectedRoute";
 
-// Firebase Auth (لزر تسجيل الخروج وإظهار/إخفاء الزر حسب حالة الدخول)
+// Firebase Auth
 import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
 
 // Styles
@@ -49,7 +51,7 @@ export default function App() {
   const navigate = useNavigate();
   const isAuthPage = loc.pathname.startsWith("/login");
 
-  // لإظهار زر الخروج فقط عند وجود مستخدم مسجّل
+  // إظهار زر الخروج فقط عند وجود مستخدم مسجّل
   const [user, setUser] = useState(null);
   useEffect(() => {
     const auth = getAuth();
@@ -95,7 +97,6 @@ export default function App() {
 
             <h1 className="title">تحكم الروضة</h1>
 
-            {/* زر تسجيل الخروج — يظهر فقط إذا كان هناك مستخدم */}
             {user && (
               <button
                 type="button"
@@ -119,7 +120,6 @@ export default function App() {
       )}
 
       <main className="app-main">
-        {/* السايدبار لا يظهر في صفحة تسجيل الدخول */}
         {!isAuthPage && <Sidebar />}
 
         <div className="page-content">
@@ -161,7 +161,7 @@ export default function App() {
               }
             />
 
-            {/* الجديد: صفحة الطالب */}
+            {/* الطالب */}
             <Route
               path="/people/student"
               element={
@@ -179,15 +179,50 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/kindergarten" 
-            element={<Kindergarten />} />
+
+            {/* الروضات */}
+            <Route path="/kindergarten" element={<Kindergarten />} />
+            <Route path="/kindergartens" element={<KindergartensPage />} />
+            <Route path="/kindergartens/:provId" element={<ProvinceKindergartensPage />} />
+
+            {/* الصفوف */}
+            <Route
+              path="/classes"
+              element={
+                <ProtectedRoute>
+                  <ClassesPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/classes/:kgId"
+              element={
+                <ProtectedRoute>
+                  <ClassCreatePage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* نقل الطلاب — مسار عام + مسار مقيّد بروضة */}
+            <Route
+              path="/classes/move"
+              element={
+                <ProtectedRoute>
+                  <ChangeClass />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/classes/:kgId/move"
+              element={
+                <ProtectedRoute>
+                  <ChangeClass />
+                </ProtectedRoute>
+              }
+            />
 
             {/* صفحة الدخول عامة */}
             <Route path="/login" element={<Login />} />
-            <Route path="/kindergartens" element={<KindergartensPage />} />
-            <Route path="/kindergartens/:provId" element={<ProvinceKindergartensPage />} />
-            <Route path="/classes" element={<ClassesPage />} />
-
 
             {/* 404 → الرئيسية */}
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -197,4 +232,3 @@ export default function App() {
     </div>
   );
 }
- 

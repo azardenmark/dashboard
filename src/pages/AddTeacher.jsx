@@ -10,9 +10,22 @@ import {
   deleteSecondaryUser,
   saveToFirestore,
 } from "../firebase";
+
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import {
-  doc, deleteDoc, collection, query, orderBy, getDocs, getDoc, setDoc, serverTimestamp
+  doc,
+  deleteDoc,
+  collection,
+  query,
+  orderBy,
+  where,
+  getDocs,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  writeBatch,
+  increment,
+  arrayUnion,
 } from "firebase/firestore";
 
 /* ================= Utils ================= */
@@ -26,7 +39,7 @@ function normalizeDigits(str = "") {
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
 function prettyFirebaseError(err) {
-  if (!err?.code) return err.message || "حدث خطأ غير معروف";
+  if (!err?.code) return err?.message || "حدث خطأ غير معروف";
   switch (err.code) {
     case "auth/email-already-in-use": return "هذا البريد مستخدم بالفعل.";
     case "auth/weak-password":        return "كلمة المرور ضعيفة جداً.";
@@ -53,7 +66,7 @@ const DEFAULT_PROVINCES = [
   { id:"QUN", name:"القنيطرة",  code:"QUN" },
 ];
 
-/* ===== publicId generator with province prefix (محلي داخل الملف) ===== */
+/* ===== publicId generator with province prefix ===== */
 function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
 function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
 async function assignPrefixedPublicId({ uid, role, col, prefix, email=null, phone=null, displayName="" }) {
@@ -76,16 +89,19 @@ async function assignPrefixedPublicId({ uid, role, col, prefix, email=null, phon
 }
 
 export default function AddTeacher() {
+  // ——— بيانات أساسية ———
   const [firstName, setFirstName] = useState("");
   const [lastName,  setLastName]  = useState("");
   const [email,     setEmail]     = useState("");
   const [phone,     setPhone]     = useState("");
   const [gender,    setGender]    = useState("male");
   const [address,   setAddress]   = useState("");
+  const [subject,   setSubject]   = useState("");   // اختصاص/مادة
+  const [active,    setActive]    = useState(true);
   const [password,  setPassword]  = useState("");
   const [confirm,   setConfirm]   = useState("");
 
-  // ملفات الشهادات
+  // ——— ملفات الشهادات ———
   const [files, setFiles] = useState([]); // File[]
   function onPickFiles(fileList) {
     if (!fileList?.length) return;
@@ -106,7 +122,7 @@ export default function AddTeacher() {
     return uploaded;
   }
 
-  // المحافظات
+  // ——— المحافظات ———
   const [provinces, setProvinces] = useState([]);
   const [provinceId, setProvinceId] = useState(""); // == code
   const selectedProvince = useMemo(
@@ -114,19 +130,25 @@ export default function AddTeacher() {
     [provinceId, provinces]
   );
 
-  // واجهة
+  // ——— الروضات/الفروع ———
+  const [kgList, setKgList] = useState([]);
+  const [kgId, setKgId] = useState("");
+  const [branchList, setBranchList] = useState([]);
+  const [branchId, setBranchId] = useState("");
+
+  // ——— واجهة ———
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState("");
   const [success, setSuccess] = useState("");
 
   const [errors, setErrors] = useState({
-    firstName: "", lastName: "", contact: "", password: "", confirm: "", province: ""
+    firstName: "", lastName: "", contact: "", password: "", confirm: "", province: "", kg: ""
   });
 
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  /* تحميل المحافظات */
+  /* تحميل المحافظات + الروضات */
   useEffect(() => {
     (async () => {
       try {
@@ -143,14 +165,58 @@ export default function AddTeacher() {
         setProvinces(DEFAULT_PROVINCES);
       }
     })();
+
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "kindergartens"));
+        const arr = [];
+        snap.forEach(d => arr.push({ id: d.id, ...(d.data()||{}) }));
+        arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
+        setKgList(arr);
+      } catch {
+        setKgList([]);
+      }
+    })();
   }, []);
+
+  // تحميل فروع الروضة
+  useEffect(() => {
+    setBranchList([]); setBranchId("");
+    if (!kgId) return;
+    (async () => {
+      try {
+        const qy = query(collection(db, "branches"), where("parentId", "==", kgId));
+        const snap = await getDocs(qy);
+        const arr = [];
+        snap.forEach(d => arr.push({ id: d.id, ...(d.data()||{}) }));
+        arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
+        setBranchList(arr);
+      } catch {
+        setBranchList([]);
+      }
+    })();
+  }, [kgId]);
+
+  // فلترة الروضات حسب المحافظة المختارة
+  const kgFiltered = useMemo(() => {
+    if (!selectedProvince) return kgList;
+    const code = selectedProvince.code;
+    const name = selectedProvince.name;
+    return kgList.filter(k =>
+      (k.provinceCode && k.provinceCode === code) ||
+      (k.provinceName && k.provinceName === name) ||
+      (k.province && k.province === name)
+    );
+  }, [kgList, selectedProvince]);
 
   function resetForm() {
     setFirstName(""); setLastName(""); setEmail(""); setPhone("");
     setGender("male"); setAddress(""); setPassword(""); setConfirm("");
+    setSubject(""); setActive(true);
     setFiles([]);
     setProvinceId("");
-    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"", province:"" });
+    setKgId(""); setBranchId("");
+    setErrors({ firstName:"", lastName:"", contact:"", password:"", confirm:"", province:"", kg:"" });
     setFormError(""); setSuccess("");
   }
 
@@ -167,6 +233,7 @@ export default function AddTeacher() {
       password : password.length >= 6 ? "" : "كلمة المرور لا تقل عن 6 أحرف",
       confirm  : password === confirm ? "" : "كلمتا المرور غير متطابقتين",
       province : selectedProvince ? "" : "اختر المحافظة",
+      kg       : kgId ? "" : "اختر الروضة",
     };
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
@@ -185,8 +252,11 @@ export default function AddTeacher() {
       const certs = await uploadCertificates(uid);
       uploadedPaths = certs.map(x => x.path);
 
-      // 3) Firestore: وثيقة المعلم (id = uid)
-      await saveToFirestore("teachers", {
+      // 3) Firestore: وثيقة المعلّم (id = uid)
+      const kg = kgList.find(k => k.id === kgId) || {};
+      const br = branchList.find(b => b.id === branchId) || {};
+
+      const base = {
         role     : "teacher",
         firstName: firstName.trim(),
         lastName : lastName.trim(),
@@ -194,12 +264,28 @@ export default function AddTeacher() {
         phone    : phoneNorm.trim(),
         gender,
         address  : address.trim() || null,
+        subject  : subject.trim() || "",
         certificates: certs,
-        active   : true,
+        active   : Boolean(active),
+
         provinceName: selectedProvince?.name || "",
         provinceCode: selectedProvince?.code || "",
+
+        kindergartenId: kgId,
+        kindergartenName: kg?.name || "",
+        branchId: branchId || null,
+        branchName: br?.name || "",
+
+        searchIndex: [
+          firstName, lastName, email, phoneNorm, subject,
+          selectedProvince?.name, kg?.name, br?.name
+        ].filter(Boolean).join(" ").toLowerCase(),
+
         createdAt: serverTimestamp(),
-      }, { id: uid });
+        updatedAt: serverTimestamp(),
+      };
+
+      await saveToFirestore("teachers", base, { id: uid });
 
       // 4) publicId مع بادئة كود المحافظة + فهرسة
       const publicId = await assignPrefixedPublicId({
@@ -211,6 +297,33 @@ export default function AddTeacher() {
         phone: phoneNorm.trim() || null,
         displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
       });
+
+      // 5) تحديثات مترابطة للروضة/الفرع (عدادات + teacherIds)
+      const batch = writeBatch(db);
+
+      if (kgId) {
+        const kRef = doc(db, "kindergartens", kgId);
+        batch.set(kRef, {}, { merge: true });
+        batch.update(kRef, {
+          teacherCount: increment(1),
+          ...(active ? { teacherActiveCount: increment(1) } : {}),
+          teacherIds: arrayUnion(uid),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (branchId) {
+        const bRef = doc(db, "branches", branchId);
+        batch.set(bRef, {}, { merge: true });
+        batch.update(bRef, {
+          teacherCount: increment(1),
+          ...(active ? { teacherActiveCount: increment(1) } : {}),
+          teacherIds: arrayUnion(uid),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
 
       setSuccess(`✅ تم إنشاء حساب المعلّم بنجاح. الكود: ${publicId}`);
       resetForm();
@@ -235,7 +348,7 @@ export default function AddTeacher() {
     <div className="ap-page">
       <div className="ap-hero">
         <h1 className="ap-hero__title">إضافة معلّم</h1>
-        <p className="ap-hero__sub">أدخل البيانات الأساسية للمعلّم الجديد.</p>
+        <p className="ap-hero__sub">أدخل البيانات الأساسية للمعلّم ثم اربطه بالروضة/الفرع ليتم تحديث اللوحات والعدادات تلقائيًا.</p>
       </div>
 
       <section className="ap-card">
@@ -328,13 +441,34 @@ export default function AddTeacher() {
               />
             </div>
 
+            {/* الاختصاص */}
+            <div className="ap-field">
+              <label>الاختصاص / المادة</label>
+              <input
+                className="ap-input"
+                value={subject}
+                onChange={(e)=>setSubject(e.target.value)}
+                type="text"
+                placeholder="رياضيات، لغة عربية، أنشطة…"
+              />
+            </div>
+
+            {/* الحالة */}
+            <div className="ap-field">
+              <label>الحالة</label>
+              <div className="ap-radio">
+                <label><input type="checkbox" checked={active} onChange={(e)=>setActive(e.target.checked)} /> نشط</label>
+              </div>
+              <div className="ap-note">إذا كان المعلّم نشطًا فسيُحتسب ضمن «عدد المعلّمين النشطين» في الروضة/الفرع.</div>
+            </div>
+
             {/* المحافظة + كود المحافظة */}
             <div className="ap-field">
               <label><span className="ap-required">*</span> المحافظة</label>
               <select
                 className={`ap-input ${errors.province ? "ap-invalid" : ""}`}
                 value={provinceId}
-                onChange={(e)=>setProvinceId(e.target.value)}
+                onChange={(e)=>{ setProvinceId(e.target.value); setKgId(""); setBranchId(""); }}
               >
                 <option value="">— اختر المحافظة —</option>
                 {provinces.map(p => (
@@ -353,6 +487,45 @@ export default function AddTeacher() {
                 placeholder="اختر المحافظة أولًا"
                 title="غير قابل للتعديل — يُستخدم كبادئة للكود العام"
               />
+            </div>
+
+            {/* الروضة + الفرع */}
+            <div className="ap-field ap-span-2">
+              <label><span className="ap-required">*</span> الروضة</label>
+              <select
+                className={`ap-input ${errors.kg ? "ap-invalid" : ""}`}
+                value={kgId}
+                onChange={(e)=>{ setKgId(e.target.value); setBranchId(""); }}
+                disabled={!provinces.length}
+              >
+                <option value="">
+                  {selectedProvince
+                    ? (kgFiltered.length ? "— اختر —" : "لا توجد روضات ضمن هذه المحافظة")
+                    : "اختر المحافظة أولًا"}
+                </option>
+                {selectedProvince && kgFiltered.map(k => (
+                  <option key={k.id} value={k.id}>{k.name || k.id}</option>
+                ))}
+              </select>
+              {errors.kg && <div className="ap-error">{errors.kg}</div>}
+
+              <div style={{marginTop:8}}>
+                <label>الفرع (اختياري)</label>
+                <select
+                  className="ap-input"
+                  value={branchId}
+                  onChange={(e)=>setBranchId(e.target.value)}
+                  disabled={!kgId}
+                >
+                  <option value="">{kgId ? "— بدون فرع / اختر —" : "اختر الروضة أولًا"}</option>
+                  {branchList.map(b => (
+                    <option key={b.id} value={b.id}>{b.name || b.id}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="ap-note" style={{marginTop:6}}>
+                ربط المعلّم بالروضة/الفرع يتيح إظهار الأعداد الحقيقية تلقائيًا في جداول الروضات والصفوف.
+              </div>
             </div>
 
             {/* كلمة المرور */}

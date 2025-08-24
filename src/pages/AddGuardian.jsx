@@ -18,15 +18,18 @@ import {
   getDoc,
   setDoc,
   serverTimestamp,
+  where,
+  limit,
+  writeBatch,
 } from "firebase/firestore";
 
 /* ================= Utils ================= */
 function normalizeDigits(str = "") {
   const map = {
-    "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
-    "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
-    "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
-    "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9"
+    "٠":"0","١":"1","٢":"2","٣":"3","٤":"4",
+    "٥":"5","٦":"6","٧":"7","٨":"8","٩":"9",
+    "۰":"0","۱":"1","۲":"2","۳":"3","۴":"4",
+    "۵":"5","۶":"6","۷":"7","۸":"8","۹":"9"
   };
   return String(str).replace(/[٠-٩۰-۹]/g, (d) => map[d] ?? d);
 }
@@ -40,7 +43,7 @@ function prettyFirebaseError(err) {
   }
 }
 
-/* ============== Provinces (fallback) ============== */
+/* ============== Provinces (fallback + seeding) ============== */
 const DEFAULT_PROVINCES = [
   { id:"DAM", name:"دمشق",      code:"DAM" },
   { id:"RDI", name:"ريف دمشق",  code:"RDI" },
@@ -58,7 +61,21 @@ const DEFAULT_PROVINCES = [
   { id:"QUN", name:"القنيطرة",  code:"QUN" },
 ];
 
-/* publicId generator with province prefix */
+async function seedDefaultProvinces() {
+  const snap = await getDocs(query(collection(db, "provinces"), limit(1)));
+  if (!snap.empty) return;
+  const batch = writeBatch(db);
+  DEFAULT_PROVINCES.forEach((p) => {
+    batch.set(
+      doc(db, "provinces", p.id),
+      { name: p.name, code: p.code, createdAt: serverTimestamp() },
+      { merge: true }
+    );
+  });
+  await batch.commit();
+}
+
+/* ===== publicId generator with province prefix ===== */
 function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
 function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
 
@@ -98,6 +115,14 @@ async function assignPrefixedPublicId({
   return publicId;
 }
 
+/** معاينة تقريبية للكود قبل الحفظ */
+function previewPublicId(prefix="", firstName="", lastName="", phone=""){
+  if (!prefix) return "";
+  const letters = (firstName + lastName).toUpperCase().replace(/[^A-Z]/g,"").slice(0,4).padEnd(4,"X");
+  const digits  = normalizeDigits(phone).slice(-4).padStart(4,"0");
+  return `${prefix}-${letters}${digits}`;
+}
+
 /* ================= Component ================= */
 export default function AddGuardian() {
   // الأساسيات
@@ -121,6 +146,12 @@ export default function AddGuardian() {
     [provinceId, provinces]
   );
 
+  // معاينة الكود
+  const codePreview = useMemo(
+    () => previewPublicId(selectedProvince?.code || "", firstName, lastName, phone),
+    [selectedProvince?.code, firstName, lastName, phone]
+  );
+
   // واجهة
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState("");
@@ -142,18 +173,22 @@ export default function AddGuardian() {
         const arr = [];
         snap.forEach(d => {
           const x = d.data() || {};
-          // اجعل id يساوي code إن وُجد ليكون ثابتًا
           const code = x.code || d.id;
           arr.push({ id: code, name: x.name || d.id, code });
         });
-        setProvinces(arr.length ? arr : DEFAULT_PROVINCES);
+        if (arr.length === 0) {
+          try { await seedDefaultProvinces(); } catch {}
+          setProvinces(DEFAULT_PROVINCES);
+        } else {
+          setProvinces(arr);
+        }
       } catch {
         setProvinces(DEFAULT_PROVINCES);
       }
     })();
   }, []);
 
-  /* -------- أبناء ولي الأمر (صورة محلية فقط كما كانت) -------- */
+  /* -------- أبناء ولي الأمر (صورة محلية فقط) -------- */
   function onUploadChild(index, file) {
     if (!file) return;
     const reader = new FileReader();
@@ -183,6 +218,16 @@ export default function AddGuardian() {
     setFormError(""); setSuccess("");
   }
 
+  // فحص تكرار سريع قبل إنشاء Auth
+  async function ensureNotDuplicate({ email, phone }) {
+    const tasks = [];
+    if (email.trim()) tasks.push(getDocs(query(collection(db, "guardians"), where("email","==", email.trim()), limit(1))));
+    if (phone.trim()) tasks.push(getDocs(query(collection(db, "guardians"), where("phone","==", phone.trim()), limit(1))));
+    const results = await Promise.all(tasks);
+    if (results[0] && !results[0].empty) throw new Error("هذا البريد الإلكتروني مسجّل مسبقًا.");
+    if (results[1] && !results[1].empty) throw new Error("رقم الهاتف مسجّل مسبقًا.");
+  }
+
   /* -------- إرسال -------- */
   async function submit(e) {
     e.preventDefault();
@@ -206,6 +251,9 @@ export default function AddGuardian() {
     try {
       setLoading(true);
 
+      // 0) فحص تكرار
+      await ensureNotDuplicate({ email, phone: phoneNorm });
+
       // 1) Auth (مثيل ثانوي)
       const cred = await createUserOnSecondary({ email: email.trim(), password });
       uid = cred.uid;
@@ -223,7 +271,8 @@ export default function AddGuardian() {
         active   : true,
         provinceName: selectedProvince?.name || "",
         provinceCode: selectedProvince?.code || "",
-        createdAt: serverTimestamp(), // ✅ طابع زمني من الخادم
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       }, { id: uid });
 
       // 3) publicId مع بادئة المحافظة + فهرسة logins
@@ -231,7 +280,7 @@ export default function AddGuardian() {
         uid,
         role: "guardian",
         col : "guardians",
-        prefix: selectedProvince.code,     // 👈 DAM / ALE ...
+        prefix: selectedProvince.code,
         email: email.trim() || null,
         phone: phoneNorm.trim() || null,
         displayName: `${firstName.trim()} ${lastName.trim()}`.trim(),
@@ -253,7 +302,7 @@ export default function AddGuardian() {
     <div className="ap-page">
       <div className="ap-hero">
         <h1 className="ap-hero__title">إضافة وليّ أمر</h1>
-        <p className="ap-hero__sub">أدخل البيانات الأساسية لوليّ الأمر وأبنائه.</p>
+        <p className="ap-hero__sub">أدخل البيانات الأساسية لوليّ الأمر وأبنائه. سيتم توليد كود عام يبدأ بكود المحافظة.</p>
       </div>
 
       <section className="ap-card">
@@ -363,13 +412,23 @@ export default function AddGuardian() {
             </div>
 
             <div className="ap-field">
-              <label>كود المحافظة (توليدي)</label>
+              <label>كود المحافظة</label>
               <input
                 className="ap-input"
                 value={selectedProvince?.code || ""}
                 readOnly
                 placeholder="اختر المحافظة أولًا"
                 title="غير قابل للتعديل — يُستخدم كبادئة للكود العام"
+              />
+            </div>
+
+            {/* معاينة الكود العام */}
+            <div className="ap-field ap-span-2">
+              <label>معاينة الكود العام (تقريبية)</label>
+              <input
+                className="ap-input"
+                value={selectedProvince ? (codePreview || `${selectedProvince.code}-XXXX0000`) : "اختر المحافظة وأكمِل البيانات لرؤية المعاينة"}
+                readOnly
               />
             </div>
 

@@ -1,402 +1,351 @@
-/* الصفحة */
-.ap-page {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* العناوين */
-.ap-hero { margin: 0 0 12px; padding: 0 12px; }
-.ap-hero__title { font-weight: 800; font-size: 1.6rem; color: #e5e7eb; margin: 0; }
-.ap-hero__sub { color: #94a3b8; margin: .25rem 0 0; }
-
-/* البطاقة */
-.ap-card {
-  margin: 0;
-  background: rgba(255,255,255,.06);
-  backdrop-filter: saturate(1.2) blur(6px);
-  border: 1px solid rgba(226,232,240,.14);
-  border-radius: 20px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.18);
-}
-.ap-card__head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 12px 16px; border-bottom: 1px solid rgba(226,232,240,.14);
-  font-weight: 700; color: #e2e8f0;
-}
-.ap-card__body { padding: 16px; }
-.ap-note { font-size: .9rem; color: #9aa6b2; }
-
-/* شبكة النموذج */
-.ap-form {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0,1fr));
-  gap: 12px 14px;
-  margin-top: 10px;
-}
-.ap-span-2 { grid-column: 1 / -1; }
-
-.ap-field { display: flex; flex-direction: column; gap: .35rem; }
-.ap-field label { font-size: .95rem; color: #cbd5e1; font-weight: 700; }
-
-/* الإدخال */
-.ap-input {
-  height: 44px;
-  padding: 0 .9rem;
-  border: 1px solid rgba(226,232,240,.22);
-  border-radius: 12px;
-  background: rgba(15,23,42,.85);
-  color: #e2e8f0;
-}
-
-/* placeholders بالعربية يمين افتراضياً */
-.ap-input::placeholder {
-  direction: rtl;
-  text-align: right;
-  color: #94a3b8;
-}
-/* استثناءات: البريد والهاتف تبقى LTR */
-.ap-field input[type="email"]::placeholder,
-.ap-field input[type="tel"]::placeholder {
-  direction: ltr;
-  text-align: left;
-}
-
-/* الحاوية */
-.ap-input-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.ap-input-wrap .ap-input {
-  width: 100%;
-  padding-inline-end: 38px; /* مساحة للأيقونة */
-}
-
-/* زر العين */
-.ap-eye {
-  position: absolute;
-  inset-inline-end: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: #94a3b8;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  padding: 0;
-}
-.ap-eye:hover { color: #cbd5e1; }
-
-/* الراديو */
-.ap-radio {
-  display: flex; align-items: center; gap: 1.25rem;
-  height: 44px; padding: .5rem .25rem;
-}
-.ap-radio label { display: flex; align-items: center; gap: .5rem; color: #cbd5e1; }
-.ap-radio input { accent-color: #10b981; }
-
-/* أبناء ولي الأمر */
-.ap-section { margin-top: .5rem; }
-.ap-section__head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: .5rem; padding-inline: 2px;
-}
-.ap-section__head h3 {
-  margin: 0; font-size: 1rem; color: #e2e8f0; font-weight: 800;
-}
-.ap-kids {
-  display: grid; gap: .8rem;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-}
-.ap-kid {
-  border: 1px solid rgba(226,232,240,.22);
-  border-radius: 14px;
-  padding: .9rem;
-  background: rgba(15,23,42,.6);
-  display: grid; gap: .5rem;
-}
-.ap-avatar {
-  display: grid; grid-template-columns: 72px 1fr;
-  gap: .6rem; align-items: center;
-}
-.ap-avatar img, .ap-avatar__ph {
-  width: 72px; height: 72px; border-radius: 14px;
-  background: #0b1324; color: #e2e8f0;
-  display: grid; place-items: center;
-  font-size: 28px;
-  border: 1px solid rgba(226,232,240,.22);
-}
-.ap-upload {
-  display: inline-grid; place-items: center;
-  height: 36px; padding: 0 .75rem;
-  border-radius: 10px;
-  background: #0b1324; color: #10b981;
-  border: 1px solid rgba(16,185,129,.45);
-  cursor: pointer; font-size: .85rem;
-}
-.ap-upload input { display: none; }
-
-/* الأزرار */
-.ap-btn {
-  height: 40px; padding: 0 .9rem; border-radius: 12px;
-  border: 1px solid rgba(203,213,225,.28);
-  background: #0b1324; color: #e2e8f0;
-}
-.ap-btn--soft { background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.35); color: #22c55e; }
-.ap-btn--primary { background: #10b981; color: #0b1220; border-color: #059669; }
-.ap-btn--danger { background: #fee; color: #c33; border-color: #f6c; }
-.ap-actions {
-  display: flex; gap: .6rem; align-items: center;
-  justify-content: flex-end; margin-top: .25rem;
-}
-
-/* الاستجابة */
-@media (max-width: 1024px) {
-  .ap-form { grid-template-columns: 1fr; }
-  .ap-card__body { padding: 12px; }
-}
-
-/* الأخطاء */
-.ap-invalid {
-  border-color: #ef4444 !important;
-  box-shadow: 0 0 0 3px rgba(239,68,68,.12);
-}
-.ap-error { color: #fca5a5; font-size: .85rem; margin-top: 4px; }
-.ap-success { color: #86efac; font-size: .9rem; }
-
-/* النجمة */
-.ap-required {
-  color: #f87171;
-  margin-right: 4px;
-  font-weight: 700;
-}
-.ap-files {
-  display: grid;
-  gap: .5rem;
-  margin-top: .5rem;
-}
-.ap-file-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: rgba(15,23,42,.6);
-  border: 1px solid rgba(226,232,240,.22);
-  border-radius: 10px;
-  padding: .5rem .75rem;
-  font-size: .9rem;
-  color: #e2e8f0;
-}
-.ap-file-item button {
-  height: 28px;
-  padding: 0 .6rem;
-  font-size: .8rem;
-}
-/* === Login page (مركز في الشاشة + واضح) === */
-.login-page{
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(180deg,#0b1220,#0f172a);
-  padding: 16px;
-}
-
-.login-card{
-  width: 100%;
-  max-width: 420px;
-  background: #0f172a;
-  border: 1px solid #2b3a4c;
-  border-radius: 16px;
-  padding: 20px;
-  color: #e5e7eb;
-  box-shadow: 0 24px 70px rgba(0,0,0,.35);
-}
-
-.login-head{ text-align:center; margin-bottom: 14px; }
-.login-head .logo{
-  width: 48px; height: 48px; border-radius: 12px;
-  display: grid; place-items: center; margin: 0 auto 8px;
-  background: linear-gradient(135deg,#10b981,#0ea5e9); color: #fff;
-  box-shadow: 0 6px 14px rgba(16,185,129,.25);
-}
-.login-head h2{ margin:0; font-weight:800; }
-.login-head .sub{ margin:6px 0 0; color:#94a3b8; font-size:12px; }
-
-.login-label{ display:block; font-size:12px; color:#cbd5e1; margin:8px 2px 6px; }
-
-.login-input{
-  width: 100%;
-  background: #0b1324;
-  border: 1px solid #2b3a4c;
-  color: #e5e7eb;
-  border-radius: 12px;
-  padding: 10px 12px;
-  outline: none;
-}
-.login-input:focus{
-  border-color: #34d399;
-  box-shadow: 0 0 0 3px rgba(52,211,153,.2);
-}
-
-.login-input-wrap{ position: relative; }
-.login-input-wrap .login-input{ padding-inline-end: 38px; }
-
-.login-eye{
-  position: absolute;
-  inset-inline-end: 6px;
-  top: 50%;
-  translate: 0 -50%;
-  height: 30px; width: 30px;
-  border-radius: 8px;
-  border: 1px solid #2b3a4c;
-  background: #0f172a;
-  color: #e5e7eb;
-  display: grid; place-items: center;
-  cursor: pointer;
-}
-.login-eye:hover{ background: #121b31; }
-
-.login-btn{
-  margin-top: 14px;
-  width: 100%;
-  background: linear-gradient(90deg,#10b981,#34d399);
-  color: #06221a;
-  border: 0;
-  border-radius: 12px;
-  font-weight: 800;
-  padding: 10px 12px;
-  cursor: pointer;
-}
-.login-btn:hover{ filter: brightness(1.05); }
-/* ==== Responsive Modal that respects the sidebar width ==== */
-
-/* هذه متغيّرات العرض الافتراضية للشريط */
+/* ====================== Core Page ====================== */
 :root{
-  --sb-open-w: 300px;   /* عرض الشريط عندما يكون مفتوحاً */
-  --sb-rail-w:  84px;   /* عرض شريط الـ rail */
-  --sb-hidden-w: 0px;   /* مخفي */
-  --modal-hpad: 24px;   /* هوامش جانبية للـ modal */
+  --sb-open-w: 300px;
+  --sb-rail-w: 84px;
+  --sb-hidden-w: 0px;
+  --modal-hpad: 24px;
 }
 
-/* Sidebar.jsx يضع data-sb على <html> = open | rail | hidden */
-html[data-sb="open"]  { --sb-w: var(--sb-open-w); }
-html[data-sb="rail"]  { --sb-w: var(--sb-rail-w); }
-html[data-sb="hidden"]{ --sb-w: var(--sb-hidden-w); }
+.ap-page{width:100%;max-width:none;margin:0;padding:0}
 
-/* الغطاء */
-.ap-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 60; /* فوق الشريط */
-  display: grid;
-  place-items: center;
-  background: rgba(10, 14, 25, .55); /* تظليل الخلفية */
-  backdrop-filter: blur(2px);
-  padding: 20px; /* تنفّس على الحواف */
+/* ====================== Headings ====================== */
+.ap-hero{margin:0 0 12px;padding:8px 12px}
+.ap-hero__title{margin:0;font-weight:900;font-size:1.55rem;letter-spacing:.2px;color:#e5e7eb}
+.ap-hero__sub{margin:.3rem 0 0;color:#94a3b8}
+
+/* ====================== Card ====================== */
+.ap-card{
+  margin:0;background:rgba(255,255,255,.06);
+  backdrop-filter:saturate(1.2) blur(6px);
+  border:1px solid rgba(226,232,240,.14);
+  border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.18)
+}
+.ap-card__head{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:10px 14px;border-bottom:1px solid rgba(226,232,240,.14);
+  font-weight:700;color:#e2e8f0
+}
+.ap-card__body{padding:14px}
+.ap-note{font-size:.88rem;color:#9aa6b2}
+
+/* ====================== Form ====================== */
+.ap-form{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px 12px;margin-top:8px
+}
+.ap-span-2{grid-column:1 / -1}
+.ap-field{display:flex;flex-direction:column;gap:.32rem}
+.ap-field label{font-size:.9rem;color:#cbd5e1;font-weight:700}
+
+.ap-input{
+  height:40px;padding:0 .85rem;border:1px solid rgba(226,232,240,.22);
+  border-radius:12px;background:rgba(15,23,42,.85);color:#e2e8f0
+}
+/* placeholders بالعربية يمين، باستثناء البريد/الهاتف */
+.ap-input::placeholder{direction:rtl;text-align:right;color:#94a3b8}
+.ap-field input[type="email"]::placeholder,
+.ap-field input[type="tel"]::placeholder{direction:ltr;text-align:left}
+
+/* Input wrap + eye */
+.ap-input-wrap{position:relative;display:flex;align-items:center}
+.ap-input-wrap .ap-input{width:100%;padding-inline-end:38px}
+.ap-eye{
+  position:absolute;inset-inline-end:8px;top:50%;transform:translateY(-50%);
+  display:grid;place-items:center;border:0;background:transparent;color:#94a3b8;
+  cursor:pointer;font-size:18px;line-height:1;padding:0
+}
+.ap-eye:hover{color:#cbd5e1}
+
+/* Radio */
+.ap-radio{display:flex;align-items:center;gap:1.1rem;height:40px;padding:.4rem .2rem}
+.ap-radio label{display:flex;align-items:center;gap:.5rem;color:#cbd5e1}
+.ap-radio input{accent-color:#10b981}
+
+/* Parent’s children blocks */
+.ap-section{margin-top:.5rem}
+.ap-section__head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem;padding-inline:2px}
+.ap-section__head h3{margin:0;font-size:1rem;color:#e2e8f0;font-weight:800}
+.ap-kids{display:grid;gap:.7rem;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.ap-kid{
+  border:1px solid rgba(226,232,240,.22);border-radius:14px;padding:.8rem;
+  background:rgba(15,23,42,.6);display:grid;gap:.45rem
+}
+.ap-avatar{display:grid;grid-template-columns:72px 1fr;gap:.6rem;align-items:center}
+.ap-avatar img,.ap-avatar__ph{
+  width:72px;height:72px;border-radius:14px;background:#0b1324;color:#e2e8f0;
+  display:grid;place-items:center;font-size:28px;border:1px solid rgba(226,232,240,.22)
 }
 
-/* اللوحة */
-.ap-modal__panel{
-  width: 100%;
-  /* العرض الأقصى يحترم الشريط الجانبي + هوامش المودال */
-  max-width: calc(100vw - var(--sb-w) - (var(--modal-hpad) * 2));
-  /* بدل السطر أعلاه يمكنك استعمال clamp لضمان حد أدنى/أقصى أنيق: */
-  max-width: clamp(320px,
-                   calc(100vw - var(--sb-w) - (var(--modal-hpad) * 2)),
-                   980px);
+/* Upload */
+.ap-upload{
+  display:inline-grid;place-items:center;height:34px;padding:0 .7rem;border-radius:10px;
+  background:#0b1324;color:#10b981;border:1px solid rgba(16,185,129,.45);cursor:pointer;font-size:.85rem
+}
+.ap-upload input{display:none}
 
-  border-radius: 16px;
-  background: #0f1729;               /* لون اللوحة */
-  border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 24px 80px rgba(0,0,0,.35);
-  overflow: hidden;
+/* Buttons */
+.ap-btn{
+  height:36px;padding:0 .8rem;border-radius:12px;border:1px solid rgba(203,213,225,.28);
+  background:#0b1324;color:#e2e8f0
+}
+.ap-btn--soft{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#22c55e}
+.ap-btn--primary{background:#10b981;color:#0b1220;border-color:#059669}
+.ap-btn--danger{background:#ef4444;color:#fff;border-color:#ef4444}
+.ap-actions{display:flex;gap:.55rem;align-items:center;justify-content:flex-end;margin-top:.25rem}
+.ap-btn-icon{height:32px;padding:0 10px}
+
+/* Responsive */
+@media (max-width:1024px){
+  .ap-form{grid-template-columns:1fr}
+  .ap-card__body{padding:12px}
 }
 
-/* جسم اللوحة الداخلي */
-.ap-modal__body{
-  padding: 18px;
-  max-height: min(84vh, 860px);
-  overflow: auto;
-}
+/* Errors */
+.ap-invalid{border-color:#ef4444!important;box-shadow:0 0 0 3px rgba(239,68,68,.12)}
+.ap-error{color:#fca5a5;font-size:.83rem;margin-top:4px}
+.ap-success{color:#86efac;font-size:.88rem}
 
-/* رأس اللوحة (عنوان + إغلاق) — اختياري */
+/* Required star */
+.ap-required{color:#f87171;margin-right:4px;font-weight:700}
+
+/* Files list */
+.ap-files{display:grid;gap:.5rem;margin-top:.5rem}
+.ap-file-item{
+  display:flex;justify-content:space-between;align-items:center;background:rgba(15,23,42,.6);
+  border:1px solid rgba(226,232,240,.22);border-radius:10px;padding:.5rem .75rem;font-size:.9rem;color:#e2e8f0
+}
+.ap-file-item button{height:28px;padding:0 .6rem;font-size:.8rem}
+
+/* ====================== Login ====================== */
+.login-page{
+  min-height:100dvh;display:grid;place-items:center;background:linear-gradient(180deg,#0b1220,#0f172a);padding:16px
+}
+.login-card{
+  width:100%;max-width:420px;background:#0f172a;border:1px solid #2b3a4c;border-radius:16px;
+  padding:20px;color:#e5e7eb;box-shadow:0 24px 70px rgba(0,0,0,.35)
+}
+.login-head{text-align:center;margin-bottom:14px}
+.login-head .logo{
+  width:48px;height:48px;border-radius:12px;display:grid;place-items:center;margin:0 auto 8px;
+  background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;box-shadow:0 6px 14px rgba(16,185,129,.25)
+}
+.login-head h2{margin:0;font-weight:800}
+.login-head .sub{margin:6px 0 0;color:#94a3b8;font-size:12px}
+.login-label{display:block;font-size:12px;color:#cbd5e1;margin:8px 2px 6px}
+.login-input{
+  width:100%;background:#0b1324;border:1px solid #2b3a4c;color:#e5e7eb;border-radius:12px;padding:10px 12px;outline:none
+}
+.login-input:focus{border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.2)}
+.login-input-wrap{position:relative}
+.login-input-wrap .login-input{padding-inline-end:38px}
+.login-eye{
+  position:absolute;inset-inline-end:6px;top:50%;translate:0 -50%;
+  height:30px;width:30px;border-radius:8px;border:1px solid #2b3a4c;background:#0f172a;color:#e5e7eb;
+  display:grid;place-items:center;cursor:pointer
+}
+.login-eye:hover{background:#121b31}
+.login-btn{
+  margin-top:14px;width:100%;background:linear-gradient(90deg,#10b981,#34d399);color:#06221a;border:0;border-radius:12px;
+  font-weight:800;padding:10px 12px;cursor:pointer
+}
+.login-btn:hover{filter:brightness(1.05)}
+
+/* ====================== Modal (unified) ====================== */
+html[data-sb="open"]{--sb-w:var(--sb-open-w)}
+html[data-sb="rail"]{--sb-w:var(--sb-rail-w)}
+html[data-sb="hidden"]{--sb-w:var(--sb-hidden-w)}
+
+.ap-modal__backdrop{
+  position:fixed;inset:0;z-index:60;display:grid;place-items:center;
+  background:rgba(10,14,25,.55);backdrop-filter:blur(2px);padding:20px
+}
+.ap-modal{
+  width:min(92vw,980px);max-height:min(84vh,860px);overflow:hidden;
+  background:#0f1729;border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.35);color:#e5e7eb
+}
 .ap-modal__head{
-  display: flex; align-items: center; gap: 8px;
-  padding: 14px 18px;
-  background: linear-gradient(90deg,#5B65F6 0%, #7B4DE3 50%, #1BAF6B 100%);
-  color: #fff; font-weight: 700;
+  display:flex;align-items:center;gap:8px;padding:12px 16px;
+  background:linear-gradient(90deg,#5B65F6 0%, #7B4DE3 50%, #1BAF6B 100%);
+  color:#fff;font-weight:800
 }
-.ap-modal__close{
-  margin-inline-start: auto;
-  appearance: none;
-  border: 0; background: transparent; color: #fff;
-  opacity: .9; cursor: pointer;
-}
-
-/* شبكة الحقول داخل الفورم: عمودان على الشاشات العريضة، عمود على الضيقة */
-.ap-form-grid{
-  display: grid;
-  grid-template-columns: repeat(2, minmax(260px, 1fr));
-  gap: 12px;
-}
-@media (max-width: 880px){
-  .ap-form-grid{ grid-template-columns: 1fr; }
+.ap-modal__title{font-size:1rem}
+.ap-modal__body{padding:14px;max-height:calc(84vh - 120px);overflow:auto}
+.ap-modal__foot{
+  display:flex;gap:8px;justify-content:flex-end;padding:10px 16px;
+  border-top:1px solid rgba(255,255,255,.06);
+  background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)
 }
 
-/* حقول/تلميحات الجماليات */
-.ap-field{
-  display: flex; flex-direction: column; gap: 6px;
+/* ====================== Generic table bits ====================== */
+.ap-table-wrap{overflow:auto;border:1px solid rgba(226,232,240,.12);border-radius:12px;background:rgba(15,23,42,.55)}
+.ap-table{width:100%;border-collapse:collapse}
+.ap-table th,.ap-table td{
+  padding:8px 10px;border-bottom:1px solid rgba(226,232,240,.08);text-align:start;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
 }
-.ap-field label{
-  font-size: 13px; color: #cbd5e1;
+.ap-table th{
+  position:sticky;top:0;z-index:1;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+  color:#cbd5e1;font-weight:700
 }
-.ap-field input, .ap-field select, .ap-field textarea{
-  width: 100%;
-  background: rgba(255,255,255,.04);
-  border: 1px solid rgba(255,255,255,.08);
-  color: #e5e7eb;
-  padding: 10px 12px;
-  border-radius: 10px;
-  outline: none;
-}
-.ap-field input::placeholder,
-.ap-field textarea::placeholder{ color: #8ea0b6; }
+.ap-table tr:hover td{background:rgba(255,255,255,.03)}
 
-/* أزرار أسفل المودال */
-.ap-modal__actions{
-  display: flex; gap: 10px; justify-content: flex-end;
-  padding: 12px 18px 18px;
-  border-top: 1px solid rgba(255,255,255,.06);
-  background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+.ap-ava{
+  width:32px;height:32px;border-radius:8px;overflow:hidden;background:#0b1324;color:#e2e8f0;
+  display:grid;place-items:center;border:1px solid rgba(226,232,240,.18);font-weight:800
 }
-.ap-btn{ padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer; }
-.ap-btn--primary{ background:#16A34A; color:#fff; }
-.ap-btn--ghost{ background:transparent; color:#cbd5e1; border:1px solid rgba(255,255,255,.12); }
+.ap-ava img{width:100%;height:100%;object-fit:cover}
 
-/* اختيار متعدد منسدِل أنيق (لو كنت تستعمله للمرحلة/الفئات) */
-.ap-multiselect{
-  position: relative;
+.ap-code{
+  display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:#0b1324;color:#a5b4fc;border:1px solid rgba(165,180,252,.35);
+  border-radius:8px;padding:3px 8px;font-size:.8rem
 }
-.ap-multiselect__trigger{
-  display:flex; align-items:center; justify-content:space-between;
-  width:100%; padding:10px 12px; border-radius:10px;
-  background: rgba(255,255,255,.04);
-  border: 1px solid rgba(255,255,255,.08);
-  color:#e5e7eb; cursor:pointer;
+
+/* Chips */
+.ap-chip{
+  display:inline-flex;align-items:center;gap:6px;font-size:.8rem;font-weight:600;
+  padding:3px 9px;border-radius:999px;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.25);color:#cbd5e1
 }
-.ap-multiselect__menu{
-  position:absolute; inset-inline:0; top: calc(100% + 6px);
-  background:#0b1220; border:1px solid rgba(255,255,255,.08);
-  border-radius:12px; padding:8px; z-index: 61; /* فوق panel */
-  max-height: 260px; overflow:auto;
-  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+.ap-chip--kpi{background:rgba(16,185,129,.12);border-color:rgba(16,185,129,.35);color:#22c55e}
+.ap-chip--danger{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35);color:#f87171}
+
+/* ====================== Classes page rows ====================== */
+.ap-stack{display:grid;gap:12px}
+.ap-line{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 12px;border-top:1px solid rgba(226,232,240,.10);background:rgba(15,23,42,.55)
 }
-.ap-multiselect__item{
-  display:flex; align-items:center; gap:8px; padding:8px 10px;
-  color:#e5e7eb; border-radius:8px; cursor:pointer;
+.ap-card .ap-line:first-child{border-top:0;border-top-left-radius:16px;border-top-right-radius:16px}
+.ap-line--click{cursor:pointer}
+.ap-line--click:hover{background:rgba(255,255,255,.06)}
+.ap-line__left{display:flex;align-items:center;gap:8px;min-width:0}
+.ap-line__right{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
+.ap-line__title{font-weight:800;color:#e5e7eb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-caret{transition:transform .18s ease;opacity:.9}
+.ap-caret--open{transform:rotate(90deg)}
+.ap-nested{padding:10px 12px 12px;background:linear-gradient(0deg,rgba(255,255,255,.03),transparent);border-top:1px dashed rgba(226,232,240,.12)}
+
+/* Section headers */
+.ap-line--section{
+  margin:8px 0;padding:10px 12px;border-radius:12px;backdrop-filter:saturate(1.05);
+  font-weight:900;letter-spacing:.2px
 }
-.ap-multiselect__item:hover{ background: rgba(255,255,255,.05); }
+/* صفوف الروضة */
+.ap-line--kg{
+  background:linear-gradient(90deg,rgba(16,185,129,.16),rgba(16,185,129,.06));
+  border:1px solid rgba(16,185,129,.42);box-shadow:inset 3px 0 0 rgba(16,185,129,.85)
+}
+.ap-line--kg:hover{background:linear-gradient(90deg,rgba(16,185,129,.20),rgba(16,185,129,.10))}
+.ap-line--kg .ap-line__title{color:#d7ffe9}
+/* فروع الروضة */
+.ap-line--branches{
+  background:linear-gradient(90deg,rgba(99,102,241,.18),rgba(99,102,241,.06));
+  border:1px solid rgba(99,102,241,.45);box-shadow:inset 3px 0 0 rgba(99,102,241,.9)
+}
+.ap-line--branches:hover{background:linear-gradient(90deg,rgba(99,102,241,.22),rgba(99,102,241,.10))}
+.ap-line--branches .ap-line__title{color:#e1e6ff}
+
+/* ====================== Users Table ====================== */
+.ut-wrap{padding:12px;--ut-font:13.25px;--ut-row-pad:8px;--ut-ava:34px}
+.ut-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.ut-head h2{margin:0;font-weight:800;font-size:17px}
+
+.btn{height:30px;padding:0 10px;border-radius:8px;border:1px solid #2b3a4c;background:#0f172a;color:#e5e7eb;cursor:pointer}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn:hover:not(:disabled){background:#121c31}
+
+.ut-toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}
+.ut-search{
+  display:flex;align-items:center;gap:8px;min-width:240px;padding:6px 10px;
+  border:1px solid #2b3a4c;border-radius:12px;background:#0f172a
+}
+.ut-search input{background:transparent;border:0;outline:none;color:#e5e7eb;width:300px;max-width:56vw}
+.ut-search input::placeholder{color:rgba(203,213,225,.55)}
+
+.ut-filters{display:flex;gap:8px}
+.ut-filters select{
+  height:34px;background:#0f172a;color:#e5e7eb;border:1px solid #2b3a4c;border-radius:10px;padding:0 10px
+}
+
+.ut-error{margin:8px 0;padding:10px;border-radius:12px;border:1px solid #7f1d1d;background:#1f0b0b;color:#fecaca}
+
+.ut-table{border:1px solid #1f2a3a;border-radius:12px;overflow:hidden;background:#0b1220;font-size:var(--ut-font)}
+.ut-thead,.ut-row{display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1.6fr .9fr;align-items:center;padding-block:var(--ut-row-pad)}
+.ut-thead{background:#0f172a;border-bottom:1px solid #1f2a3a;color:#9fb1c5;font-weight:800}
+.th,.td{
+  padding:8px 12px;border-bottom:1px solid #101826;display:flex;align-items:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.th-actions,.td-actions{justify-content:flex-end}
+.td-actions{gap:6px}
+.td-name{gap:10px;min-width:0}
+.td-name .who{min-width:0}
+.who .name{font-weight:800;font-size:calc(var(--ut-font) + 1px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who .sub{font-size:calc(var(--ut-font) - 1px);color:#9fb1c5}
+
+/* صور */
+.avatar{
+  height:var(--ut-ava);width:var(--ut-ava);border-radius:12px;overflow:hidden;border:1px solid #243244;flex:0 0 auto;
+  background:#0b1324;display:grid;place-items:center
+}
+.avatar img{height:100%;width:100%;object-fit:cover;display:block}
+.avatar-fallback{
+  height:100%;width:100%;display:grid;place-items:center;background:linear-gradient(135deg,#1f2937,#0ea5e9);
+  color:#fff;font-weight:800;font-size:calc(var(--ut-ava)*.42)
+}
+
+/* Role chips */
+.role-chip{
+  display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:999px;font-size:calc(var(--ut-font) - 1px);
+  border:1px solid transparent;color:#e5e7eb;background:#132033
+}
+.role-guardian{background:rgba(99,102,241,.18);border-color:rgba(99,102,241,.35)}
+.role-teacher{background:rgba(14,165,233,.18);border-color:rgba(14,165,233,.35)}
+.role-driver{background:rgba(245,158,11,.18);border-color:rgba(245,158,11,.35)}
+.role-student{background:rgba(16,185,129,.18);border-color:rgba(16,185,129,.35)}
+
+/* Active/Inactive button */
+.st{
+  height:calc(var(--ut-ava)*.5);display:inline-flex;align-items:center;gap:8px;padding:0 10px;border-radius:999px;
+  border:1px solid #2b3a4c;background:#0f172a;color:#e5e7eb;cursor:pointer;font-size:var(--ut-font)
+}
+.st .dot{height:9px;width:9px;border-radius:50%;background:#ef4444}
+.st--on{border-color:#065f46;background:rgba(16,185,129,.14)}
+.st--on .dot{background:#10b981}
+.st--off{border-color:#7f1d1d;background:rgba(239,68,68,.10)}
+
+.link{color:#a6e3ff;text-decoration:none}
+.link:hover{text-decoration:underline}
+
+/* Row action icons aligned right */
+.icon-btn{
+  height:34px;width:34px;border-radius:8px;display:grid;place-items:center;border:1px solid #2b3a4c;background:#0f172a;
+  color:#e5e7eb;cursor:pointer
+}
+.icon-btn:hover{background:#12203a}
+.icon-btn.danger{border-color:#7f1d1d}
+.icon-btn.danger:hover{background:#1f0b0b}
+
+.ut-skeleton,.ut-empty{padding:24px;text-align:center;color:#93a3b8}
+
+.ut-footer{display:flex;align-items:center;justify-content:space-between;padding:8px 6px;color:#9fb1c5}
+.pager{display:flex;align-items:center;gap:6px}
+.pg{min-width:68px;text-align:center}
+.ut-note{margin-top:10px;font-size:12px;color:#93a3b8}
+
+/* Responsive cols */
+@media (max-width:980px){
+  .ut-thead,.ut-row{grid-template-columns:2.2fr 1fr .9fr 1.1fr 1.3fr .8fr}
+}
+@media (max-width:780px){
+  .ut-thead,.ut-row{grid-template-columns:2.4fr .9fr .9fr 1fr 1.1fr .8fr}
+  .who .sub{display:none}
+}
+@media (max-width:640px){
+  .ut-toolbar{gap:6px}
+  .ut-search input{max-width:46vw}
+}
+
+/* خيار تكبير لاحقًا إن رغبت */
+.ut-wrap.ut--large{--ut-font:16px;--ut-row-pad:14px;--ut-ava:52px}

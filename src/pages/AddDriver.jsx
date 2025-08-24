@@ -15,11 +15,11 @@ import {
   ref, uploadBytes, getDownloadURL, deleteObject
 } from "firebase/storage";
 import {
-  doc, deleteDoc, collection, getDocs, getDoc, setDoc, serverTimestamp, query, orderBy
+  doc, deleteDoc, collection, getDocs, getDoc, setDoc, serverTimestamp,
+  query, orderBy, where, limit, writeBatch
 } from "firebase/firestore";
 
-
-// Provinces defaults (id = code)
+/* ================= Provinces defaults (id = code) ================= */
 const DEFAULT_PROVINCES = [
   { id:"DAM", name:"دمشق",      code:"DAM" },
   { id:"RDI", name:"ريف دمشق",  code:"RDI" },
@@ -37,22 +37,23 @@ const DEFAULT_PROVINCES = [
   { id:"QUN", name:"القنيطرة",  code:"QUN" },
 ];
 
-// يكتب المحافظات الافتراضية مرة واحدة لو كانت المجموعة فارغة
+// كتابة المحافظات الافتراضية مرة واحدة لو كانت المجموعة فارغة
 async function seedDefaultProvinces() {
-  const { writeBatch, doc, collection, getDocs, query, limit } = await import("firebase/firestore");
+  const qy = query(collection(db, "provinces"), limit(1));
+  const snap = await getDocs(qy);
+  if (!snap.empty) return;
   const batch = writeBatch(db);
-  const q = query(collection(db, "provinces"), limit(1));
-  const snap = await getDocs(q);
-  if (!snap.empty) return; // موجودة مسبقاً
-
   DEFAULT_PROVINCES.forEach(p => {
-    batch.set(doc(db, "provinces", p.id), { name: p.name, code: p.code, createdAt: serverTimestamp() }, { merge: true });
+    batch.set(
+      doc(db, "provinces", p.id),
+      { name: p.name, code: p.code, createdAt: serverTimestamp() },
+      { merge: true }
+    );
   });
   await batch.commit();
 }
 
-
-/* ========= Utils ========= */
+/* ================= Utils ================= */
 function normalizeDigits(str = "") {
   const map = {
     "٠":"0","١":"1","٢":"2","٣":"3","٤":"4",
@@ -73,7 +74,7 @@ function prettyFirebaseError(err) {
   }
 }
 
-/* ========= توليد كود دخول مع بادئة المحافظة + فهرسته ========= */
+/* ====== توليد كود دخول مع بادئة المحافظة + فهرسته ====== */
 function randomLetters4(){ const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ"; let s=""; for(let i=0;i<4;i++) s+=A[Math.floor(Math.random()*A.length)]; return s; }
 function randomDigits4(){ return String(Math.floor(Math.random()*10000)).padStart(4,"0"); }
 
@@ -87,17 +88,40 @@ async function createPrefixedLoginCode({ uid, role, col, email, phone, displayNa
       // سجّل الكود في فهرس logins
       await setDoc(
         doc(db, "logins", cand),
-        { uid, role, col, email: email || null, phone: phone || null, displayName: displayName || "", createdAt: serverTimestamp() },
+        {
+          uid, role, col,
+          email: email || null,
+          phone: phone || null,
+          displayName: displayName || "",
+          createdAt: serverTimestamp()
+        },
         { merge: true }
       );
       // واكتبه أيضاً على وثيقة المستخدم كـ publicId
-      await setDoc(doc(db, col, uid), { publicId: cand, updatedAt: serverTimestamp() }, { merge: true });
+      await setDoc(
+        doc(db, col, uid),
+        { publicId: cand, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
       return cand;
     }
   }
   throw new Error("تعذّر توليد كود دخول فريد. أعد المحاولة.");
 }
 
+// معاينة تقريبية (ليست نهائية) للكود قبل الحفظ
+function previewLoginCode(provCode = "", firstName = "", lastName = "", phone = "") {
+  if (!provCode) return "";
+  const letters = (firstName + lastName)
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "")
+    .slice(0, 4)
+    .padEnd(4, "X");
+  const digits = normalizeDigits(phone).slice(-4).padStart(4, "0");
+  return `${provCode}-${letters}${digits}`;
+}
+
+/* ================= Component ================= */
 export default function AddDriver() {
   // الحقول الأساسية
   const [firstName, setFirstName] = useState("");
@@ -117,6 +141,12 @@ export default function AddDriver() {
     [provinces, provinceId]
   );
 
+  // معاينة تقريبية للكود
+  const codePreview = useMemo(
+    () => previewLoginCode(selProvince?.code || "", firstName, lastName, phone),
+    [selProvince?.code, firstName, lastName, phone]
+  );
+
   // رخص القيادة
   const [files, setFiles] = useState([]);
 
@@ -134,31 +164,27 @@ export default function AddDriver() {
 
   /* ==== تحميل المحافظات من Firestore ==== */
   useEffect(() => {
-  (async () => {
-    try {
-      const qy = query(collection(db, "provinces"), orderBy("name"));
-      const snap = await getDocs(qy);
-      const arr = [];
-      snap.forEach(d => {
-        const x = d.data() || {};
-        arr.push({ id: d.id, name: x.name || d.id, code: x.code || d.id });
-      });
+    (async () => {
+      try {
+        const qy = query(collection(db, "provinces"), orderBy("name"));
+        const snap = await getDocs(qy);
+        const arr = [];
+        snap.forEach(d => {
+          const x = d.data() || {};
+          arr.push({ id: d.id, name: x.name || d.id, code: x.code || d.id });
+        });
 
-      if (arr.length === 0) {
-        // جرّب تهيئتها مرة واحدة (يتطلب صلاحية الأدمن)
-        try { await seedDefaultProvinces(); } catch {}
-        // اعرض قائمة افتراضية فوراً حتى لو فشلت الكتابة
+        if (arr.length === 0) {
+          try { await seedDefaultProvinces(); } catch {}
+          setProvinces(DEFAULT_PROVINCES);
+        } else {
+          setProvinces(arr);
+        }
+      } catch {
         setProvinces(DEFAULT_PROVINCES);
-      } else {
-        setProvinces(arr);
       }
-    } catch {
-      // عند أي خطأ قراءة، أعرض الافتراضي
-      setProvinces(DEFAULT_PROVINCES);
-    }
-  })();
-}, []);
-
+    })();
+  }, []);
 
   /* ==== مرفقات ==== */
   function onPickFiles(list) { if (!list?.length) return; setFiles(prev => [...prev, ...Array.from(list)]); }
@@ -189,6 +215,18 @@ export default function AddDriver() {
     setFormError(""); setSuccess("");
   }
 
+  // فحص تكرار سريع (قبل إنشاء مستخدم الـ Auth)
+  async function ensureNotDuplicate({ email, phone }) {
+    const e = email.trim();
+    const p = phone.trim();
+    const promises = [];
+    if (e) promises.push(getDocs(query(collection(db, "drivers"), where("email", "==", e), limit(1))));
+    if (p) promises.push(getDocs(query(collection(db, "drivers"), where("phone", "==", p), limit(1))));
+    const [eSnap, pSnap] = await Promise.all(promises.length === 2 ? promises : [...promises, Promise.resolve({ empty:true })]);
+    if (eSnap && !eSnap.empty) throw new Error("هذا البريد الإلكتروني مسجّل لسائق آخر.");
+    if (pSnap && !pSnap.empty) throw new Error("رقم الهاتف مسجّل لسائق آخر.");
+  }
+
   /* ==== حفظ ==== */
   async function submit(e) {
     e.preventDefault();
@@ -214,6 +252,9 @@ export default function AddDriver() {
     try {
       setLoading(true);
 
+      // 0) فحص تكرار سريع
+      await ensureNotDuplicate({ email, phone: phoneNorm });
+
       // 1) إنشاء مستخدم Auth على المثيل الثانوي
       const cred = await createUserOnSecondary({ email: email.trim(), password });
       uid = cred.uid;
@@ -225,24 +266,26 @@ export default function AddDriver() {
       // 3) حفظ مستند السائق (id = uid) + المحافظة
       const provinceName = selProvince?.name || "";
       const provinceCode = selProvince?.code || "";
+      const displayName  = `${firstName.trim()} ${lastName.trim()}`.trim();
+
       await saveToFirestore("drivers", {
         role     : "driver",
         firstName: firstName.trim(),
         lastName : lastName.trim(),
+        displayName,
         email    : email.trim(),
         phone    : phoneNorm.trim(),
         gender,
         address  : address.trim() || null,
         licenses,
         active   : true,
-        // الحقول الجديدة
         province     : provinceName,
         provinceCode : provinceCode,
-        createdAt: new Date().toISOString(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       }, { id: uid });
 
       // 4) توليد كود دخول مع بادئة كود المحافظة + فهرسته وكتابته كـ publicId
-      const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
       const fullCode = await createPrefixedLoginCode({
         uid,
         role: "driver",
@@ -253,7 +296,7 @@ export default function AddDriver() {
         provinceCode: provinceCode || "NA"
       });
 
-      setSuccess(`🎉 تم إنشاء حساب السائق. الكود: ${fullCode}`);
+      setSuccess(`🎉 تم إنشاء حساب السائق بنجاح. الكود: ${fullCode}`);
       resetForm();
     } catch (err) {
       console.error(err);
@@ -277,7 +320,7 @@ export default function AddDriver() {
     <div className="ap-page">
       <div className="ap-hero">
         <h1 className="ap-hero__title">إضافة سائق</h1>
-        <p className="ap-hero__sub">أدخل البيانات الأساسية للسائق الجديد.</p>
+        <p className="ap-hero__sub">أدخل البيانات الأساسية للسائق الجديد. سيتم توليد كود دخول بصيغة <b>PROV-XXXX9999</b> تلقائيًا.</p>
       </div>
 
       <section className="ap-card">
@@ -388,7 +431,7 @@ export default function AddDriver() {
 
             {/* كود المحافظة (غير قابل للتعديل) */}
             <div className="ap-field">
-              <label>كود المحافظة (توليدي)</label>
+              <label>كود المحافظة</label>
               <input
                 className="ap-input"
                 value={selProvince?.code || ""}
@@ -396,6 +439,16 @@ export default function AddDriver() {
                 disabled
                 placeholder="اختر المحافظة أولاً"
                 title="يعبّأ تلقائياً حسب المحافظة"
+              />
+            </div>
+
+            {/* معاينة كود الدخول التقريبية */}
+            <div className="ap-field ap-span-2">
+              <label>معاينة كود الدخول (تقريبية — النهائي قد يختلف)</label>
+              <input
+                className="ap-input"
+                value={selProvince ? (codePreview || `${selProvince.code}-XXXX0000`) : "اختر المحافظة وأكمِل البيانات لرؤية المعاينة"}
+                readOnly
               />
             </div>
 
@@ -487,7 +540,7 @@ export default function AddDriver() {
 
             {/* الأزرار */}
             <div className="ap-actions ap-span-2">
-              <span className="ap-note">سيتم إنشاء الحساب كـ <b>سائق</b>.</span>
+              <span className="ap-note">سيتم إنشاء الحساب كـ <b>سائق</b> وتوليد كود دخول تلقائي.</span>
               <button type="button" className="ap-btn" onClick={resetForm}>تفريغ</button>
               <button type="submit" className="ap-btn ap-btn--primary" disabled={loading}>
                 {loading ? "جاري الحفظ…" : "إنشاء الحساب"}

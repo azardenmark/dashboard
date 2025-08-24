@@ -18,6 +18,11 @@ import {
   runTransaction,
   orderBy,
   serverTimestamp,
+  updateDoc,
+  setDoc,
+  increment,
+  writeBatch,
+  arrayUnion,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
@@ -55,6 +60,36 @@ function pretty(err) {
   return err?.message || "حدث خطأ غير متوقع.";
 }
 const emptyParent = { name:"", phone:"", email:"", job:"", nationalId:"", notes:"" };
+
+
+function calcAgeFromDob(dob) {
+  if (!dob) return "";
+  const d = new Date(dob);
+  if (isNaN(+d)) return "";
+  const now = new Date();
+  let y = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) y--;
+  return String(y);
+}
+
+function dobFromAgeYears(years, currentDob) {
+  const n = new Date();
+  let month = n.getMonth();
+  let day = n.getDate();
+  if (currentDob) {
+    const cd = new Date(currentDob);
+    if (!isNaN(+cd)) { month = cd.getMonth(); day = cd.getDate(); }
+  }
+  const y = n.getFullYear() - (isFinite(Number(years)) ? Number(years) : 0);
+  const dt = new Date(y, month, day);
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+
 
 /* ——— Helpers للرمز ——— */
 const pad4 = (n) => String(n).padStart(4, "0");
@@ -105,8 +140,6 @@ async function fallbackNextCode(db, kgId, provCode, kgCode) {
    الصفحة
 ——————————————————————————————————————————————————————————————— */
 export default function AddStudent() {
-  console.log("[AddStudent] mount");
-
   // تبويب
   const [tab, setTab] = useState("profile"); // profile | health
 
@@ -117,6 +150,7 @@ export default function AddStudent() {
   const [dob, setDob]             = useState("");
   const [gender, setGender]       = useState("female");
   const [address, setAddress]     = useState("");
+  const [ageYears, setAgeYears] = useState("");
 
   // أخطاء + مراجع
   const [errors, setErrors] = useState({ firstName:"", lastName:"" });
@@ -156,7 +190,7 @@ export default function AddStudent() {
   const [parentModal, setParentModal] = useState(null);
   const [parentDraft, setParentDraft] = useState({ ...emptyParent });
 
-  // صحة (بعد التعديل)
+  // صحة
   const [health, setHealth] = useState({
     heightCm:"", weightKg:"", bloodGroup:"",
     allergy:"", chronic:"", medications:"",
@@ -168,6 +202,9 @@ export default function AddStudent() {
   const [loading, setLoading] = useState(false);
   const [formError, setError] = useState("");
   const [success, setSuccess] = useState("");
+useEffect(() => {
+  setAgeYears(calcAgeFromDob(dob));
+}, [dob]);
 
   /* ————— تحميل القوائم ————— */
   useEffect(() => {
@@ -181,12 +218,11 @@ export default function AddStudent() {
           arr.push({ id: x.code || d.id, name: x.name || d.id, code: x.code || d.id });
         });
         setProvinces(arr.length ? arr : DEFAULT_PROVINCES);
-        console.log("[AddStudent] provinces:", arr.length || DEFAULT_PROVINCES.length);
-      } catch (e) {
-        console.warn("[AddStudent] provinces fallback", e?.message || e);
+      } catch {
         setProvinces(DEFAULT_PROVINCES);
       }
     })();
+    
 
     // Guardians
     (async () => {
@@ -204,10 +240,7 @@ export default function AddStudent() {
         });
         arr.sort((a,b)=>a.fullName.localeCompare(b.fullName, "ar"));
         setGuardians(arr);
-        console.log("[AddStudent] guardians:", arr.length);
-      } catch (e) {
-        console.warn("[AddStudent] guardians load failed:", e?.message || e);
-      }
+      } catch {}
     })();
 
     // Kindergartens
@@ -218,10 +251,7 @@ export default function AddStudent() {
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setKgList(arr);
-        console.log("[AddStudent] kindergartens:", arr.length);
-      } catch (e) {
-        console.warn("[AddStudent] kindergartens load failed:", e?.message || e);
-      }
+      } catch {}
     })();
   }, []);
 
@@ -239,10 +269,7 @@ export default function AddStudent() {
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setBranchList(arr);
-        console.log("[AddStudent] branches for kg", kgId, ":", arr.length);
-      } catch (e) {
-        console.warn("[AddStudent] branches load failed:", e?.message || e);
-      }
+      } catch {}
     })();
   }, [kgId]);
 
@@ -259,10 +286,7 @@ export default function AddStudent() {
         snap.forEach(d => arr.push({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>(a.name||"").localeCompare(b.name||"", "ar"));
         setClassList(arr);
-        console.log("[AddStudent] classes for", parent, ":", arr.length);
-      } catch (e) {
-        console.warn("[AddStudent] classes load failed:", e?.message || e);
-      }
+      } catch {}
     })();
   }, [kgId, branchId]);
 
@@ -279,14 +303,12 @@ export default function AddStudent() {
         if (branchId) {
           const bSnap = await getDoc(doc(db, "branches", branchId));
           if (bSnap.exists()) driverIds = bSnap.data()?.driverIds || [];
-          console.log("[AddStudent] drivers from branch:", driverIds.length);
         }
 
         // 2) إن لم يوجد في الفرع → من الروضة
         if (!driverIds.length) {
           const kSnap = await getDoc(doc(db, "kindergartens", kgId));
           if (kSnap.exists()) driverIds = kSnap.data()?.driverIds || [];
-          console.log("[AddStudent] drivers from kg:", driverIds.length);
         }
 
         // 3) fallback: query by kgId
@@ -298,7 +320,6 @@ export default function AddStudent() {
           if (arr.length) {
             arr.sort((a,b)=>([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
             setDriverList(arr);
-            console.log("[AddStudent] drivers fallback list:", arr.length);
             return;
           }
         }
@@ -316,9 +337,7 @@ export default function AddStudent() {
           .filter(Boolean)
           .sort((a,b)=> ([a.firstName,a.lastName].join(" ")).localeCompare([b.firstName,b.lastName].join(" "),"ar"));
         setDriverList(list);
-        console.log("[AddStudent] drivers final list:", list.length);
-      } catch (e) {
-        console.warn("[AddStudent] drivers load failed:", e?.message || e);
+      } catch {
         setDriverList([]);
       }
     })();
@@ -362,7 +381,6 @@ export default function AddStudent() {
       const provCode = currentProvince.code;
       const preview = await previewNextStudentCode(db, kgId, provCode, kgCode);
       setCode(preview || "");
-      console.log("[AddStudent] code preview:", preview);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kgId, currentProvince?.code]);
@@ -393,7 +411,6 @@ export default function AddStudent() {
 
   // تفريغ
   function resetForm() {
-    console.log("[AddStudent] reset form");
     setTab("profile");
     setCode(""); setFirstName(""); setLastName(""); setDob("");
     setGender("female"); setAddress("");
@@ -426,7 +443,6 @@ export default function AddStudent() {
 
     try {
       setLoading(true);
-      console.log("[AddStudent] start save");
 
       const kg  = kgList.find(x=>x.id===kgId) || {};
       const br  = branchList.find(x=>x.id===branchId) || {};
@@ -446,18 +462,26 @@ export default function AddStudent() {
       try {
         const r = await allocateStudentCode(db, kgId, provCode, kgCode);
         finalCode = r.code; seq = r.seq;
-        console.log("[AddStudent] code allocated (tx):", finalCode, seq);
       } catch (ee) {
-        console.warn("[AddStudent] allocate failed → fallback", ee?.message || ee);
         const r = await fallbackNextCode(db, kgId, provCode, kgCode);
         finalCode = r.code; seq = r.seq;
-        console.log("[AddStudent] code allocated (fallback):", finalCode, seq);
       }
+
+      // فهرس بحث بسيط
+      const searchIndex = [
+        finalCode,
+        firstName, lastName,
+        (primary?.phone || ""), (primary?.email || ""),
+        (kg?.name || ""), (br?.name || ""), (cl?.name || "")
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
 
       const base = {
         role: "student",
 
-        // نعمل برمز واحد فقط (وسنجعله أيضًا publicId لسهولة البحث والعرض)
+        // رمز الطالب (ويُستخدم أيضًا كـ publicId)
         code: finalCode,
         publicId: finalCode,
 
@@ -471,7 +495,7 @@ export default function AddStudent() {
         dob      : dob || null,
         gender,
         address  : address.trim() || "",
-        active   : true, // إدارة الحالة من شاشة المستخدمين
+        active   : true,
 
         // الربط
         primaryGuardianId: primaryGuardianId || null,
@@ -512,14 +536,14 @@ export default function AddStudent() {
           dietNotes: health.dietNotes || "",
         },
 
-        createdAt: new Date().toISOString(),
+        searchIndex,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       };
 
       // 1) إنشاء وثيقة الطالب
       const { id } = await saveToFirestore("students", base);
-      console.log("[AddStudent] student created:", id);
-
-      // 2) publicId (لا ننشئ كودًا إضافيًا - نستخدم نفس رمز الطالب)
+      // 2) publicId (نستخدم نفس الرمز ولا ننشئ كودًا إضافيًا)
       await assignPublicIdAndIndex({
         uid: id,
         role: "student",
@@ -529,47 +553,99 @@ export default function AddStudent() {
         displayName: `${base.firstName} ${base.lastName}`.trim(),
         index: false,
       });
-      console.log("[AddStudent] publicId assigned");
-
       // 3) ربط الطالب مع أولياء الأمور
       await linkStudentToGuardians({ studentId: id, guardianIds });
-      console.log("[AddStudent] guardians linked:", guardianIds.length);
 
-      // 4) رفع الصورة (خلف الكواليس كي لا يظل الزر «جاري الحفظ…»)
+      // 4) تحديثات مترابطة (عدادات + وصلات) — دفعة واحدة
+      const batch = writeBatch(db);
+
+      // روضة
+      if (kgId) {
+        batch.update(doc(db, "kindergartens", kgId), {
+          studentCount: increment(1),
+          lastStudentAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      // فرع
+      if (branchId) {
+        batch.set(doc(db, "branches", branchId), {}, { merge: true });
+        batch.update(doc(db, "branches", branchId), {
+          studentCount: increment(1),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      // صف
+      if (classId) {
+        const cRef = doc(db, "classes", classId);
+        batch.set(cRef, {}, { merge: true });
+        batch.update(cRef, {
+          studentCount: increment(1),
+          studentIds: arrayUnion(id),
+          updatedAt: serverTimestamp(),
+        });
+        // وصلة مساعدة classStudents
+        const csId = `${classId}_${id}`;
+        batch.set(doc(db, "classStudents", csId), {
+          classId,
+          studentId: id,
+          parentId: branchId || kgId,
+          kindergartenId: kgId,
+          branchId: branchId || null,
+          enrolledAt: serverTimestamp(),
+          active: true,
+          code: finalCode,
+          studentName: `${firstName} ${lastName}`.trim(),
+          className: cl?.name || "",
+          kindergartenName: kg?.name || "",
+          branchName: br?.name || "",
+        }, { merge: true });
+      }
+
+      // سائق
+      if (driverId) {
+        const dRef = doc(db, "drivers", driverId);
+        batch.set(dRef, {}, { merge: true });
+        batch.update(dRef, {
+          studentCount: increment(1),
+          studentIds: arrayUnion(id),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      // أولياء الأمور (احتياط في حال linkStudentToGuardians لا يضيف studentIds)
+      guardianIds.forEach(gid => {
+        batch.set(doc(db, "guardians", gid), {
+          studentIds: arrayUnion(id),
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+      });
+
+      await batch.commit();
+
+      // 5) رفع الصورة (غير حاجب للواجهة)
       if (photoFile) {
         const _id = id;
         const _photo = photoFile;
         const path = `students/${_id}/avatar_${Date.now()}_${_photo.name}`;
-        console.log("[AddStudent] photo upload scheduled:", path);
-
         (async () => {
           try {
             const r = ref(storage, path);
-            const timeout = new Promise((_, rej) =>
-              setTimeout(() => rej(new Error("upload-timeout")), 20000)
-            );
-            const uploadTask = (async () => {
-              const snap = await uploadBytes(r, _photo);
-              const url  = await getDownloadURL(snap.ref);
-              await saveToFirestore("students", { photoURL: url }, { id: _id, merge: true });
-              console.log("[AddStudent] photo uploaded & url saved");
-            })();
-            await Promise.race([uploadTask, timeout]);
+            const snap = await uploadBytes(r, _photo);
+            const url  = await getDownloadURL(snap.ref);
+            await saveToFirestore("students", { photoURL: url, updatedAt: serverTimestamp() }, { id: _id, merge: true });
           } catch (e) {
-            console.warn("[AddStudent] photo upload skipped:", e?.message || e);
+            // تجاهل الفشل في الصورة
           }
         })();
       }
 
       setSuccess(`✅ تم إضافة الطالب بنجاح. الرمز: ${finalCode}`);
-      console.log("[AddStudent] done successfully");
       resetForm();
     } catch (err) {
-      console.error("[AddStudent] ERROR:", err);
       setError(pretty(err));
     } finally {
       setLoading(false);
-      console.log("[AddStudent] finalize");
     }
   }
 
@@ -579,7 +655,7 @@ export default function AddStudent() {
       {/* رأس */}
       <div className="ap-hero">
         <h1 className="ap-hero__title">إضافة طالب</h1>
-        <p className="ap-hero__sub">املأ التبويبين ثم اضغط «إضافة الطالب». سيتم حفظ كل البيانات ضمن <b>students</b>.</p>
+        <p className="ap-hero__sub">املأ التبويبين ثم اضغط «إضافة الطالب». سيتم حفظ كل البيانات ضمن <b>students</b> وتحديث العدادات فورًا.</p>
       </div>
 
       {/* تبويبات */}
@@ -643,19 +719,46 @@ export default function AddStudent() {
               </div>
 
               {/* الميلاد + الجنس */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                <div className="ap-field">
-                  <label>تاريخ الميلاد</label>
-                  <input className="ap-input" type="date" value={dob} onChange={(e)=>setDob(e.target.value)}/>
-                </div>
-                <div className="ap-field">
-                  <label>الجنس</label>
-                  <div className="ap-radio">
-                    <label><input type="radio" checked={gender==="female"} onChange={()=>setGender("female")} /> أنثى</label>
-                    <label><input type="radio" checked={gender==="male"} onChange={()=>setGender("male")} /> ذكر</label>
-                  </div>
-                </div>
-              </div>
+              {/* الميلاد + العمر + الجنس */}
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+  <div className="ap-field">
+    <label>تاريخ الميلاد</label>
+    <input
+      className="ap-input"
+      type="date"
+      value={dob}
+      onChange={(e)=>setDob(e.target.value)}
+    />
+  </div>
+
+  <div className="ap-field">
+    <label>العمر (بالسنوات)</label>
+    <input
+      className="ap-input"
+      type="number"
+      min="0"
+      dir="ltr"
+      placeholder="مثال: 5"
+      value={ageYears || ""}
+      onChange={(e)=>{
+        const v = e.target.value.replace(/[^\d]/g,"");
+        setAgeYears(v);
+        // تحديث dob تلقائيًا بناءً على العمر المدخل
+        setDob(dobFromAgeYears(Number(v || 0), dob));
+      }}
+      title="تعديل العمر سيعدّل تاريخ الميلاد تلقائيًا (مع الحفاظ على اليوم/الشهر الحاليين إن وُجدا)"
+    />
+  </div>
+
+  <div className="ap-field">
+    <label>الجنس</label>
+    <div className="ap-radio">
+      <label><input type="radio" checked={gender==="female"} onChange={()=>setGender("female")} /> أنثى</label>
+      <label><input type="radio" checked={gender==="male"} onChange={()=>setGender("male")} /> ذكر</label>
+    </div>
+  </div>
+</div>
+
 
               {/* العنوان */}
               <div className="ap-field">
@@ -728,7 +831,7 @@ export default function AddStudent() {
                 <div className="ap-note">سائقو الفرع أولاً، وإن لم يوجد فستظهر قائمة سائقين الروضة.</div>
               </div>
 
-              {/* الرمز — نقلناه هنا (بعد اختيار المحافظة/الروضة) */}
+              {/* الرمز — معاينة */}
               <div className="ap-field">
                 <label>رمز الطالب (يتولَّد تلقائيًا)</label>
                 <input
@@ -847,7 +950,7 @@ export default function AddStudent() {
                   )}
                 </div>
                 <div className="ap-note" style={{ marginTop: 8 }}>
-                  تلميح: الحساب المُشار إليه كنقطة خضراء هو <b>وليّ الأمر المسؤول</b> الذي سيطّلع على بيانات الطالب لاحقًا في التطبيق.
+                  تلميح: الحساب المُشار إليه كنقطة خضراء هو <b>وليّ الأمر المسؤول</b>.
                 </div>
               </div>
             </>
